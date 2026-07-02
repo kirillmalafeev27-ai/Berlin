@@ -20,16 +20,19 @@ export class CharacterMouth {
     this.floor      = opts.floor      ?? 0.06;  // ignore quiet room tone
     this.value      = 0;
 
-    // find the head mesh + jawOpen morph index
-    this.mesh = null; this.jawIndex = -1;
+    // find every mesh with a jawOpen morph (a multi-material head exports as
+    // several primitives → several three.js meshes, all must be driven)
+    this.targets = [];
     gltf.scene.traverse((o) => {
       if (o.isMesh && o.morphTargetDictionary &&
           'jawOpen' in o.morphTargetDictionary) {
-        this.mesh = o;
-        this.jawIndex = o.morphTargetDictionary['jawOpen'];
+        this.targets.push({ mesh: o, index: o.morphTargetDictionary['jawOpen'] });
       }
     });
-    if (!this.mesh) console.warn('CharacterMouth: no jawOpen morph found');
+    // back-compat aliases
+    this.mesh = this.targets[0]?.mesh ?? null;
+    this.jawIndex = this.targets[0]?.index ?? -1;
+    if (!this.targets.length) console.warn('CharacterMouth: no jawOpen morph found');
 
     this._audioCtx = null;
     this._analyser = null;
@@ -80,7 +83,7 @@ export class CharacterMouth {
 
   // Call every frame.
   update() {
-    if (this.jawIndex < 0) return;
+    if (!this.targets.length) return;
     let target = 0;
     if (this._analyser) {
       this._analyser.getByteTimeDomainData(this._data);
@@ -96,6 +99,8 @@ export class CharacterMouth {
     }
     // exponential smoothing so the jaw doesn't chatter
     this.value += (target - this.value) * (1 - this.smoothing);
-    this.mesh.morphTargetInfluences[this.jawIndex] = this.value;
+    for (const t of this.targets) {
+      t.mesh.morphTargetInfluences[t.index] = this.value;
+    }
   }
 }

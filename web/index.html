@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>facerig — jaw-open lip-sync calibration</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font: 13px/1.45 system-ui, sans-serif; background: #22262b; color: #dde3ea; }
+  #viewport { width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #status {
+    position: fixed; left: 12px; bottom: 12px; max-width: 46em;
+    background: rgba(20,23,27,.85); border: 1px solid #3a4048; border-radius: 8px;
+    padding: 8px 12px; pointer-events: none; white-space: pre-wrap;
+  }
+  #stats {
+    position: fixed; left: 12px; top: 12px;
+    background: rgba(20,23,27,.85); border: 1px solid #3a4048; border-radius: 8px;
+    padding: 8px 12px; pointer-events: none;
+  }
+  #stats b { color: #8fd0ff; }
+  #hint {
+    position: fixed; left: 50%; top: 46%; transform: translate(-50%,-50%);
+    color: #8b94a0; text-align: center; pointer-events: none;
+  }
+  input[type=file] { display: none; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="viewport"></canvas>
+<div id="hint">Drop a .glb here<br><small>full-body models welcome — you'll isolate the head with a box</small></div>
+<div id="stats"></div>
+<div id="status"></div>
+<input type="file" id="fileGlb" accept=".glb,.gltf">
+<input type="file" id="fileCfg" accept=".json">
+<input type="file" id="fileAudio" accept="audio/*">
+<script type="module">
+  import './js/main.js';
+  // hide the center hint once a model is in
+  const orig = window.__facerig?.loadArrayBuffer;
+  const iv = setInterval(() => {
+    if (window.__facerig?.state?.root) {
+      document.getElementById('hint').style.display = 'none';
+      clearInterval(iv);
+    }
+  }, 300);
+</script>
+</body>
+</html>
