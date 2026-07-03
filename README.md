@@ -1,5 +1,56 @@
 # facerig — jaw-open lip-sync rigs for AI-generated GLBs
 
+## v0.4 — volumetric mouth (no more paper-thin angular slit)
+
+The v0.3 slit inherited the low-poly angularity and had single-polygon edges.
+v0.4 rebuilds the mouth with generated geometry, live in the tool:
+
+1. **Knife cut** — stylized faces paint the mouth onto 2–4 giant triangles;
+   there are no edges along the lip line at all. The knife slices every
+   triangle straddling the mouth plane inside the slit window, cutting a
+   straight dense seam through triangle interiors. Decisions are made per
+   edge, so both owners of an edge always agree — no T-junctions.
+2. **Seam subdivision** (`lip_subdiv`, default 3) — every seam edge is split
+   into N segments. New verts sit exactly on the old edges (rest pose is
+   unchanged), but the jaw gaussian gets sampled densely along the lip, so
+   the opening becomes a smooth arc instead of a low-poly zigzag.
+3. **Volumetric lips** (`lip_rim`) — a bevel strip (1–3 rings, face-textured)
+   rounds the lip edge backward, and a dark **pocket** primitive continues
+   inward: rim walls → rounded cap. The pocket's opening ring reuses the
+   bevel weld-ring data verbatim — identical positions, identical morph
+   deltas, skinning copied from the same source verts — a real weld with no
+   gap at any `jawOpen` value (asserted in tests, not just eyeballed).
+
+New config params (all in the exported config JSON, UI in *Mouth / jaw*):
+`lip_subdiv`, `lip_rim`, `rim_depth`, `rim_segments`, `bevel_width`,
+`bevel_segments`, `edge_smooth` (Laplacian smoothing of the extrusion path —
+tames crooked Meshy edges).
+
+The hard requirements hold by construction:
+
+- every generated vertex carries **provenance** (a weighted list of source
+  verts) — jawOpen/mouthPucker deltas, UVs, normals, pre-existing morphs and
+  **JOINTS/WEIGHTS** all flow through it, so nothing new is ever left
+  unskinned or morphless (the classic "rim stays behind the opening lip" bug
+  is tested against directly);
+- all work is confined to the head-region box;
+- seam matching runs with a spatial tolerance — "coincident" duplicate verts
+  on AI exports drift by ~1e-4 of head height and exact matching breaks;
+- the mouth-surgery passes are pure functions shared by the browser preview,
+  the Export button and the batch CLI (byte-identical outputs, asserted).
+
+Implementation note: the spec suggested `three-mesh-bvh` and
+`@gltf-transform/core`. Neither was needed: provenance makes nearest-vertex
+searches trivial (every new vert descends from known verts), boundary loops
+come from tolerance-based edge matching (BVH doesn't help there), and the
+existing zero-dependency GLB patcher already preserves morphs, skinning and
+byte alignment — it passes `gltf-validator` with 0 errors on all three test
+characters and keeps the Render deploy dependency-free.
+
+**Known limitation (by design):** this adds *thickness*, not anatomy. There
+are still no anatomical edge loops around the mouth, so extreme openings read
+stylized rather than photoreal — fine for the game's low-poly register.
+
 ## v0.3 — web service (calibration tool + game preview + TTS proxy)
 
 Everything from the v0.2 roadmap is now implemented:

@@ -11,12 +11,11 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
 
 import {
-  mergeCfg, mouthAnchor, jawDelta, puckerDelta, buildMouthGeometry,
-  augmentAttribute, applyAugmentedMorphDeltas, measureDelta,
+  mergeCfg, mouthAnchor, jawDelta, puckerDelta,
   cavityAndTonguePlacement, boundsInBox, guessHeadBox, snapFrontOffsetFrac,
-  guessFrontOrientation,
+  guessFrontOrientation, extendAttributeData, computeNormalsFor,
 } from './facerig-core.js';
-import { rigGLB } from './rig-pipeline.js';
+import { rigGLB, mouthSurgery } from './rig-pipeline.js';
 import { parseGLB } from './glb-io.js';
 import { AmplitudeDriver } from './audio-drive.js';
 import { idbSet } from './idb-store.js';
@@ -73,9 +72,10 @@ const state = {
   region: { lo: [0, 0, 0], hi: [0, 0, 0] },
   anchor: null,
   headBounds: null,
-  cut: null,                // active mouth-geometry augmentation (or null)
+  surgery: null,            // active mouthSurgery result (or null)
   cutSig: null,
-  stats: { driven: 0, regionVerts: 0, maxOffset: 0, cutAdded: 0, rimAdded: 0 },
+  stats: { driven: 0, regionVerts: 0, maxOffset: 0, cutAdded: 0,
+           knifeAdded: 0, subdivAdded: 0, rimVerts: 0 },
   jawOpen: 0,
   pucker: 0,
   audioDrives: false,
@@ -132,7 +132,7 @@ function clearModel() {
   Object.assign(state, {
     gltf: null, gltfJson: null, root: null, meshes: [], mesh: null,
     meshIndex: null, originalGeo: null, anchor: null, headBounds: null,
-    cut: null, cutSig: null,
+    surgery: null, cutSig: null,
   });
 }
 
@@ -145,7 +145,7 @@ function restoreSelectedMesh() {
 }
 
 function destroyHelpers() {
-  for (const k of ['regionBox', 'anchorMarker', 'cavity', 'tongue']) {
+  for (const k of ['regionBox', 'anchorMarker', 'cavity', 'tongue', 'pocket']) {
     if (helpers[k]) { helpers[k].removeFromParent(); helpers[k] = null; }
   }
   helpers.regionProxy.removeFromParent();
@@ -159,7 +159,7 @@ function selectMesh(mesh) {
 
   state.mesh = mesh;
   state.originalGeo = mesh.geometry;
-  state.cut = null;
+  state.surgery = null;
   state.cutSig = null;
   guiState.mesh = meshLabel(mesh);
 
@@ -200,26 +200,38 @@ function pristineIndices() {
 }
 
 // ---------------------------------------------------------------------------
-// working geometry: pristine attributes (+ cut duplicates) + facerig morphs
+// working geometry: pristine attributes extended through mouth-surgery
+// provenance (knife / subdiv / cut / rim verts) + facerig morph slots.
+// Mirrors exactly what rig-pipeline does to the exported GLB.
 // ---------------------------------------------------------------------------
 function rebuildWorkingGeometry() {
   const mesh = state.mesh;
   const src = state.originalGeo;
-  const aug = state.cut;
+  const s = state.surgery;
   const g = new THREE.BufferGeometry();
+  const prov = s ? s.prov : [];
 
   for (const [name, attr] of Object.entries(src.attributes)) {
-    const semantic = name.toUpperCase();
-    const data = aug ? augmentAttribute(attr.array, attr.itemSize, aug, semantic) : attr.array.slice();
+    let data;
+    if (name === 'position') {
+      data = s ? s.positions.slice() : attr.array.slice();
+    } else {
+      const mode = /skin/i.test(name) ? 'nearest' : 'lerp';
+      data = prov.length ? extendAttributeData(attr.array, attr.itemSize, prov, mode)
+                         : attr.array.slice();
+      if (name === 'normal' && s && s.volume) {
+        const front = [0, 0, 0];
+        front[state.anchor.fa] = state.anchor.sign;
+        data.set(
+          computeNormalsFor(s.positions, s.volume.tris, s.preRimCount, s.positions.length / 3, front),
+          s.preRimCount * attr.itemSize);
+      }
+    }
     g.setAttribute(name, new THREE.BufferAttribute(data, attr.itemSize, attr.normalized));
   }
   g.setIndex(new THREE.BufferAttribute(
-    aug ? aug.indices.slice() : Uint32Array.from(pristineIndices()), 1));
+    s ? s.indices.slice() : Uint32Array.from(pristineIndices()), 1));
   for (const grp of src.groups) g.addGroup(grp.start, grp.count, grp.materialIndex);
-  if (aug?.rimAdded && src.groups.length) {
-    const start = pristineIndices().length;
-    g.addGroup(start, aug.indices.length - start, src.groups[0].materialIndex || 0);
-  }
   g.morphTargetsRelative = true;
 
   // carry over any pre-existing morphs, then append ours
@@ -228,7 +240,8 @@ function rebuildWorkingGeometry() {
   const revDict = Object.fromEntries(Object.entries(dict).map(([k, v]) => [v, k]));
   const srcMorphs = (src.morphAttributes.position || []);
   const morphs = srcMorphs.map((a, i) => {
-    const data = aug ? augmentAttribute(a.array, a.itemSize, aug, 'MORPH_POSITION') : a.array.slice();
+    const data = prov.length ? extendAttributeData(a.array, a.itemSize, prov, 'lerp')
+                             : a.array.slice();
     const na = new THREE.BufferAttribute(data, a.itemSize, a.normalized);
     na.name = a.name || revDict[i] || `morph_${i}`;
     names.push(na.name);
@@ -252,10 +265,37 @@ function rebuildWorkingGeometry() {
   mesh._facerigJaw = mesh.morphTargetDictionary.jawOpen;
   mesh._facerigPucker = mesh.morphTargetDictionary.mouthPucker;
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  mats.forEach((mt) => {
-    if (aug?.rimAdded) mt.side = THREE.DoubleSide;
-    mt.needsUpdate = true;
-  });
+  mats.forEach((mt) => { mt.needsUpdate = true; });
+
+  rebuildPocketPreview();
+}
+
+// dark mouth-pocket preview mesh (mirrors the exported pocket primitive)
+function rebuildPocketPreview() {
+  if (helpers.pocket) { helpers.pocket.removeFromParent(); helpers.pocket.geometry.dispose(); helpers.pocket = null; }
+  const s = state.surgery;
+  if (!s || !s.volume || !helpers.space) return;
+  const pv = s.volume.pocket.verts;
+  const pos = new Float32Array(pv.length * 3);
+  pv.forEach((v, k) => pos.set(v.pos, k * 3));
+  const front = [0, 0, 0];
+  front[state.anchor.fa] = state.anchor.sign;
+  const nrm = computeNormalsFor(pos, s.volume.pocket.tris, 0, pv.length, front);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setIndex(new THREE.BufferAttribute(s.volume.pocket.tris.slice(), 1));
+  g.morphTargetsRelative = true;
+  const jaw = new THREE.BufferAttribute(new Float32Array(pv.length * 3), 3);
+  jaw.name = 'jawOpen';
+  const puck = new THREE.BufferAttribute(new Float32Array(pv.length * 3), 3);
+  puck.name = 'mouthPucker';
+  g.morphAttributes.position = [jaw, puck];
+  const mat = new THREE.MeshStandardMaterial({ metalness: 0, roughness: 1 });
+  mat.color.setRGB(...state.cfg.cavity_color.slice(0, 3));
+  helpers.pocket = new THREE.Mesh(g, mat);
+  helpers.pocket.updateMorphTargets();
+  helpers.space.add(helpers.pocket);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,38 +364,65 @@ function recompute() {
   state.stats.regionVerts = hb.count;
   state.anchor = mouthAnchor(hb, state.cfg);
 
-  // lip cut (recomputed only when the inputs that shape it change)
+  // mouth surgery (recomputed only when the inputs that shape it change)
   const cfg = state.cfg;
-  const sig = cfg.lip_cut
+  const lipCut = cfg.lip_cut || cfg.lip_rim;
+  const sig = lipCut
     ? JSON.stringify([state.anchor.mouth, cfg.lip_cut_width_frac,
-                      cfg.mouth_open_height_frac, cfg.mouth_segments,
-                      cfg.rim_depth, cfg.rim_segments,
-                      cfg.bevel_width, cfg.bevel_segments, cfg.edge_smooth,
-                      state.region.lo, state.region.hi, cfg.front_axis, cfg.front_sign])
+                      state.region.lo, state.region.hi, cfg.front_axis, cfg.front_sign,
+                      cfg.lip_subdiv, cfg.lip_rim, cfg.rim_depth, cfg.rim_segments,
+                      cfg.bevel_width, cfg.bevel_segments, cfg.edge_smooth])
     : 'off';
   if (sig !== state.cutSig) {
     state.cutSig = sig;
-    state.cut = cfg.lip_cut ? buildMouthGeometry(pos0, pristineIndices(), state.anchor, cfg, state.region) : null;
-    state.stats.cutAdded = state.cut ? state.cut.cutAdded : 0;
-    state.stats.rimAdded = state.cut ? state.cut.rimAdded : 0;
+    state.surgery = lipCut
+      ? mouthSurgery(pos0, pristineIndices(), state.anchor, cfg, state.region)
+      : null;
+    const c = state.surgery?.counts;
+    state.stats.cutAdded = c ? c.dup : 0;
+    state.stats.knifeAdded = c ? c.knife : 0;
+    state.stats.subdivAdded = c ? c.subdiv : 0;
+    state.stats.rimVerts = c ? c.rim : 0;
     rebuildWorkingGeometry();
   }
 
-  const positions = state.cut ? state.cut.positions : pos0;
-  const jaw = jawDelta(positions, state.anchor, cfg, state.region,
-    { lowerMask: state.cut?.lowerMask, hardBelow: cfg.lip_cut });
-  applyAugmentedMorphDeltas(jaw.delta, state.cut, 'jaw');
-  const measuredJaw = measureDelta(jaw.delta);
-  state.stats.driven = measuredJaw.driven;
-  state.stats.maxOffset = measuredJaw.maxOffset;
+  const s = state.surgery;
+  const preRim = s ? s.preRimCount : pos0.length / 3;
+  const core = s ? s.positions.subarray(0, preRim * 3) : pos0;
+  const jaw = jawDelta(core, state.anchor, cfg, state.region,
+    { lowerMask: s?.mask, hardBelow: lipCut });
+  const puck = puckerDelta(core, state.anchor, cfg, state.region);
+  state.stats.driven = jaw.driven;
+  state.stats.maxOffset = jaw.maxOffset;
 
   const jawAttr = mesh.geometry.morphAttributes.position[mesh._facerigJaw];
-  jawAttr.array.set(jaw.delta);
-  jawAttr.needsUpdate = true;
   const puckAttr = mesh.geometry.morphAttributes.position[mesh._facerigPucker];
-  const puck = puckerDelta(positions, state.anchor, cfg, state.region);
-  applyAugmentedMorphDeltas(puck, state.cut, 'pucker');
+  jawAttr.array.set(jaw.delta);
   puckAttr.array.set(puck);
+  if (s && s.volume) {
+    s.volume.verts.forEach((v, k) => {
+      const o = (preRim + k) * 3, si = v.src * 3;
+      for (let c = 0; c < 3; c++) {
+        jawAttr.array[o + c] = jaw.delta[si + c] * v.scale;
+        puckAttr.array[o + c] = puck[si + c] * v.scale;
+      }
+    });
+    // pocket preview morphs: scaled copies, same as the exported primitive
+    if (helpers.pocket) {
+      const [pJaw, pPuck] = helpers.pocket.geometry.morphAttributes.position;
+      s.volume.pocket.verts.forEach((v, k) => {
+        const si = v.src * 3;
+        for (let c = 0; c < 3; c++) {
+          pJaw.array[k * 3 + c] = jaw.delta[si + c] * v.scale;
+          pPuck.array[k * 3 + c] = puck[si + c] * v.scale;
+        }
+      });
+      pJaw.needsUpdate = true;
+      pPuck.needsUpdate = true;
+      helpers.pocket.material.color.setRGB(...cfg.cavity_color.slice(0, 3));
+    }
+  }
+  jawAttr.needsUpdate = true;
   puckAttr.needsUpdate = true;
 
   // helper transforms
@@ -363,6 +430,7 @@ function recompute() {
   helpers.anchorMarker.scale.setScalar(0.02 * a.size[1]);
   helpers.anchorMarker.position.fromArray(a.mouth);
   const place = cavityAndTonguePlacement(a, cfg);
+  helpers.cavity.visible = !(s && s.volume); // welded pocket replaces the ellipsoid
   helpers.cavity.position.fromArray(place.cavCenter);
   helpers.cavity.scale.fromArray(place.cavRadii);
   helpers.cavity.rotation.set(...cfg.cavity_rotation_deg.map((d) => d * Math.PI / 180));
@@ -391,14 +459,15 @@ function updateStatsOverlay() {
   const s = state.stats, hb = state.headBounds;
   if (!hb) { el.textContent = ''; return; }
   const h = hb.hi[1] - hb.lo[1];
+  const lipCut = state.cfg.lip_cut || state.cfg.lip_rim;
   el.innerHTML =
     `head verts in box: <b>${s.regionVerts}</b> · driven by jaw: <b>${s.driven}</b>` +
-    (state.cfg.lip_cut ? ` · lip-cut verts: <b>${s.cutAdded}</b> · rim verts: <b>${s.rimAdded || 0}</b>` : '') + '<br>' +
+    (lipCut ? ` · seam verts: knife <b>${s.knifeAdded}</b> + subdiv <b>${s.subdivAdded}</b> + split <b>${s.cutAdded}</b>` : '') +
+    (state.cfg.lip_rim ? ` · rim <b>${s.rimVerts}</b>` : '') + '<br>' +
     `head height: ${h.toFixed(3)} · max open offset: ${s.maxOffset.toFixed(4)} ` +
     `(${(s.maxOffset / h * 100).toFixed(1)}% of head)`;
   if (s.driven === 0) el.innerHTML += '<br>⚠ no vertices driven — check front axis/sign and mouth height';
-  if (state.cfg.lip_cut && !s.cutAdded) el.innerHTML += '<br>⚠ lip cut produced no split — widen the cut or move the anchor to the lip line';
-  if (state.cfg.lip_cut && !s.rimAdded) el.innerHTML += '<br>⚠ rim produced no geometry — check mouth segments / rim depth';
+  if (lipCut && !s.knifeAdded && !s.cutAdded) el.innerHTML += '<br>⚠ no slit created — widen the cut or move the anchor to the lip line';
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +485,7 @@ function exportConfigObject() {
   const gltfMesh = state.meshIndex != null ? state.gltfJson.meshes[state.meshIndex] : null;
   return {
     tool: 'facerig-web',
-    version: '0.3',
+    version: '0.4',
     input: state.fileName,
     head_mesh: gltfMesh ? (gltfMesh.name ?? null) : (state.mesh?.name || null),
     head_mesh_index: state.meshIndex,
@@ -531,13 +600,16 @@ fOrient.add(state.cfg, 'front_sign', { '+1': 1, '-1': -1 }).name('front sign').o
 const fJaw = gui.addFolder('Mouth / jaw');
 fJaw.add(state.cfg, 'lip_cut').name('lip cut (open mouth)').onChange(recompute).listen();
 fJaw.add(state.cfg, 'lip_cut_width_frac', 0.1, 1, 0.01).name('cut width').onChange(recompute).listen();
-fJaw.add(state.cfg, 'mouth_open_height_frac', 0.02, 0.25, 0.005).name('mouth oval h').onChange(recompute).listen();
-fJaw.add(state.cfg, 'mouth_segments', 8, 64, 1).name('mouth segments').onChange(recompute).listen();
-fJaw.add(state.cfg, 'rim_depth', 0, 0.25, 0.005).name('rim_depth').onChange(recompute).listen();
-fJaw.add(state.cfg, 'rim_segments', 1, 4, 1).name('rim_segments').onChange(recompute).listen();
-fJaw.add(state.cfg, 'bevel_width', 0, 0.12, 0.0025).name('bevel_width').onChange(recompute).listen();
-fJaw.add(state.cfg, 'bevel_segments', 0, 4, 1).name('bevel_segments').onChange(recompute).listen();
-fJaw.add(state.cfg, 'edge_smooth', 0, 8, 1).name('edge_smooth').onChange(recompute).listen();
+fJaw.add(state.cfg, 'lip_subdiv', 1, 6, 1).name('seam subdiv').onChange(recompute).listen();
+fJaw.add(state.cfg, 'lip_rim').name('volumetric lips (rim)').onChange((v) => {
+  if (v && !state.cfg.lip_cut) { state.cfg.lip_cut = true; refreshGui(); }
+  recompute();
+}).listen();
+fJaw.add(state.cfg, 'rim_depth', 0.02, 0.3, 0.005).name('rim depth').onChange(recompute).listen();
+fJaw.add(state.cfg, 'rim_segments', 1, 4, 1).name('rim segments').onChange(recompute).listen();
+fJaw.add(state.cfg, 'bevel_width', 0, 0.08, 0.002).name('bevel width').onChange(recompute).listen();
+fJaw.add(state.cfg, 'bevel_segments', 0, 3, 1).name('bevel segments').onChange(recompute).listen();
+fJaw.add(state.cfg, 'edge_smooth', 0, 8, 1).name('edge smooth').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_height_frac', 0, 1, 0.005).name('mouth height').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_region_frac', 0.02, 0.6, 0.005).name('region σ').onChange(recompute).listen();
 fJaw.add(state.cfg, 'jaw_strength_frac', 0, 0.5, 0.005).name('jaw strength').onChange(recompute).listen();
@@ -737,6 +809,10 @@ function tick() {
     const v = state.audioDrives || guiState.micOn ? audioVal : state.jawOpen;
     m.morphTargetInfluences[m._facerigJaw] = v;
     m.morphTargetInfluences[m._facerigPucker] = state.pucker;
+    if (helpers.pocket && helpers.pocket.morphTargetInfluences) {
+      helpers.pocket.morphTargetInfluences[0] = v;
+      helpers.pocket.morphTargetInfluences[1] = state.pucker;
+    }
     if (state.audioDrives || guiState.micOn) guiState.jawOpen = v;
   }
   orbit.update();

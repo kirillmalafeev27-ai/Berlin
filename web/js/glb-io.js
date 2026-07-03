@@ -3,6 +3,8 @@
 // asset, we only APPEND to the original binary blob and patch the JSON, so
 // skinning, textures, animations and extensions all survive untouched.
 
+import { extendAttributeData } from './facerig-core.js';
+
 const GLB_MAGIC = 0x46546C67;
 const CHUNK_JSON = 0x4E4F534A;
 const CHUNK_BIN = 0x004E4942;
@@ -169,7 +171,18 @@ export class GLBPatcher {
     const bv = { buffer: 0, byteOffset, byteLength: bytes.byteLength };
     if (target) bv.target = target;
     this.json.bufferViews.push(bv);
+    this._bvData = this._bvData || new Map();
+    this._bvData.set(this.json.bufferViews.length - 1, typedArray);
     return this.json.bufferViews.length - 1;
+  }
+
+  // Read any accessor — original ones from the source binary, appended ones
+  // from the typed arrays we stored when creating them.
+  getAccessorData(accIdx) {
+    const acc = this.json.accessors[accIdx];
+    const stored = this._bvData && this._bvData.get(acc.bufferView);
+    if (stored) return stored; // ours are tightly packed, zero accessor offset
+    return readAccessor(this.json, this.chunks[0], accIdx);
   }
 
   addAccessorVec3(f32) {
@@ -229,117 +242,86 @@ export class GLBPatcher {
     }
   }
 
-  // Replace a primitive's vertex data after a lip cut: every attribute (and
-  // every existing morph-target attribute) gets duplicated tail vertices, and
-  // the index buffer is rewritten. Old accessors stay in the file (unused but
-  // valid); new ones are appended.
-  replaceCutGeometry(meshIndex, primIndex, dupSources, newIndices) {
-    const prim = this.json.meshes[meshIndex].primitives[primIndex];
-    const dupAttr = (accIdx) => {
-      const acc = this.json.accessors[accIdx];
-      const data = readAccessor(this.json, this.chunks[0], accIdx);
-      const itemSize = TYPE_SIZE[acc.type];
-      const n = acc.count;
-      const out = new data.constructor((n + dupSources.length) * itemSize);
-      out.set(data);
-      for (let k = 0; k < dupSources.length; k++) {
+  // Append a typed array as a new accessor, copying layout from an optional
+  // template accessor (componentType/type/normalized).
+  _addAccessorLike(data, type, componentType, { normalized = false, withMinMax = false } = {}) {
+    const itemSize = TYPE_SIZE[type];
+    const bufferView = this.addBufferView(data, TARGET_ARRAY_BUFFER);
+    const acc = { bufferView, componentType, count: data.length / itemSize, type };
+    if (normalized) acc.normalized = true;
+    if (withMinMax) {
+      const min = new Array(itemSize).fill(Infinity);
+      const max = new Array(itemSize).fill(-Infinity);
+      for (let i = 0; i < acc.count; i++) {
         for (let c = 0; c < itemSize; c++) {
-          out[(n + k) * itemSize + c] = data[dupSources[k] * itemSize + c];
+          const v = data[i * itemSize + c];
+          if (v < min[c]) min[c] = v;
+          if (v > max[c]) max[c] = v;
         }
       }
-      const bufferView = this.addBufferView(out, TARGET_ARRAY_BUFFER);
-      const newAcc = {
-        bufferView, componentType: acc.componentType,
-        count: n + dupSources.length, type: acc.type,
-      };
-      if (acc.normalized) newAcc.normalized = true;
-      if (acc.min && acc.max) {
-        // recompute min/max (required for POSITION)
-        const min = new Array(itemSize).fill(Infinity);
-        const max = new Array(itemSize).fill(-Infinity);
-        for (let i = 0; i < newAcc.count; i++) {
-          for (let c = 0; c < itemSize; c++) {
-            const v = out[i * itemSize + c];
-            if (v < min[c]) min[c] = v;
-            if (v > max[c]) max[c] = v;
-          }
-        }
-        newAcc.min = min; newAcc.max = max;
-      }
-      this.json.accessors.push(newAcc);
-      return this.json.accessors.length - 1;
-    };
-
-    for (const key of Object.keys(prim.attributes)) {
-      prim.attributes[key] = dupAttr(prim.attributes[key]);
+      acc.min = min; acc.max = max;
     }
-    for (const target of prim.targets || []) {
-      for (const key of Object.keys(target)) target[key] = dupAttr(target[key]);
-    }
-    const vertCount = this.json.accessors[prim.attributes.POSITION].count;
-    prim.indices = this.addAccessorIndices(newIndices, vertCount);
+    this.json.accessors.push(acc);
+    return this.json.accessors.length - 1;
   }
 
-  // Replace a primitive after a procedural mouth augmentation. POSITION and
-  // indices come from the augmentation; all other per-vertex data is inherited
-  // from nearest source head vertices so skinning and existing morphs survive.
-  replaceAugmentedGeometry(meshIndex, primIndex, aug) {
+  // Replace a primitive's vertex data after mouth surgery. Every new vertex is
+  // described by a provenance record {a, b, t} over ORIGINAL vertex indices
+  // (b = -1 → copy of a): float attributes are lerped, JOINTS/WEIGHTS copy the
+  // nearest source so bone indices never blend, existing morph targets lerp.
+  // `overrides` supplies exact data for computed vertices as
+  // { NAME: { offset, data } } — offset counted in new-vert positions (rim
+  // verts get computed POSITION/NORMAL; subdiv/dup verts come out of the
+  // provenance blend exactly). Old accessors stay (unused but valid).
+  replacePrimitiveGeometry(meshIndex, primIndex, { prov, overrides = {}, indices }) {
     const prim = this.json.meshes[meshIndex].primitives[primIndex];
-    const extendAttr = (accIdx, semantic = '') => {
+    const extend = (accIdx, name, override) => {
       const acc = this.json.accessors[accIdx];
       const data = readAccessor(this.json, this.chunks[0], accIdx);
       const itemSize = TYPE_SIZE[acc.type];
-      let out;
-      if (semantic === 'POSITION') {
-        out = aug.positions;
-      } else {
-        out = new data.constructor(aug.vertexCount * itemSize);
-        out.set(data);
-        for (let k = 0; k < aug.sourceForAdded.length; k++) {
-          const dst = aug.baseCount + k;
-          const src = aug.sourceForAdded[k];
-          for (let c = 0; c < itemSize; c++) {
-            out[dst * itemSize + c] = data[src * itemSize + c];
-          }
-        }
-        if (semantic === 'NORMAL' && itemSize === 3 && aug.generatedNormals) {
-          out.set(aug.generatedNormals, aug.generatedStart * 3);
-        }
-      }
-
-      const bufferView = this.addBufferView(out, semantic === 'INDICES' ? TARGET_ELEMENT_ARRAY : TARGET_ARRAY_BUFFER);
-      const newAcc = {
-        bufferView, componentType: acc.componentType,
-        count: aug.vertexCount, type: acc.type,
-      };
-      if (acc.normalized) newAcc.normalized = true;
-      if (acc.min && acc.max) {
-        const min = new Array(itemSize).fill(Infinity);
-        const max = new Array(itemSize).fill(-Infinity);
-        for (let i = 0; i < newAcc.count; i++) {
-          for (let c = 0; c < itemSize; c++) {
-            const v = out[i * itemSize + c];
-            if (v < min[c]) min[c] = v;
-            if (v > max[c]) max[c] = v;
-          }
-        }
-        newAcc.min = min; newAcc.max = max;
-      }
-      this.json.accessors.push(newAcc);
-      return this.json.accessors.length - 1;
+      const mode = /^(JOINTS|WEIGHTS)_/.test(name) ? 'nearest' : 'lerp';
+      const out = extendAttributeData(data, itemSize, prov, mode);
+      if (override) out.set(override.data, data.length + override.offset * itemSize);
+      return this._addAccessorLike(out, acc.type, acc.componentType, {
+        normalized: acc.normalized, withMinMax: !!(acc.min && acc.max),
+      });
     };
-
     for (const key of Object.keys(prim.attributes)) {
-      prim.attributes[key] = extendAttr(prim.attributes[key], key);
+      prim.attributes[key] = extend(prim.attributes[key], key, overrides[key]);
     }
     for (const target of prim.targets || []) {
-      for (const key of Object.keys(target)) target[key] = extendAttr(target[key], `MORPH_${key}`);
+      for (const key of Object.keys(target)) target[key] = extend(target[key], key, null);
     }
-    prim.indices = this.addAccessorIndices(aug.indices, aug.vertexCount);
+    const vertCount = this.json.accessors[prim.attributes.POSITION].count;
+    prim.indices = this.addAccessorIndices(indices, vertCount);
+  }
 
-    if (aug.rimAdded && prim.material != null && this.json.materials[prim.material]) {
-      this.json.materials[prim.material].doubleSided = true;
+  // Add a new primitive to an existing mesh (e.g. the mouth pocket, welded to
+  // the head by construction). attrs: { NAME: { data, type, componentType,
+  // normalized? } }. Returns the primitive index.
+  addPrimitive(meshIndex, { attrs, indices, material }) {
+    const mesh = this.json.meshes[meshIndex];
+    const attributes = {};
+    for (const [name, a] of Object.entries(attrs)) {
+      attributes[name] = this._addAccessorLike(a.data, a.type, a.componentType, {
+        normalized: a.normalized, withMinMax: name === 'POSITION',
+      });
     }
+    const vertCount = this.json.accessors[attributes.POSITION].count;
+    const prim = { attributes, indices: this.addAccessorIndices(indices, vertCount) };
+    if (material != null) prim.material = material;
+    // spec: all primitives of a mesh must have the same number of morph
+    // targets — pad with zero-delta targets if the mesh already has some
+    const existing = mesh.primitives[0]?.targets?.length || 0;
+    if (existing > 0) {
+      prim.targets = [];
+      for (let i = 0; i < existing; i++) {
+        const zero = new Float32Array(vertCount * 3);
+        prim.targets.push({ POSITION: this._addAccessorLike(zero, 'VEC3', COMP_FLOAT, { withMinMax: true }) });
+      }
+    }
+    mesh.primitives.push(prim);
+    return mesh.primitives.length - 1;
   }
 
   addMaterial(name, rgba, { metallic = 0, roughness = 1, doubleSided = false } = {}) {

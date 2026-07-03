@@ -24,13 +24,15 @@ export const DEFAULT_CFG = {
   region_falloff_frac: 0.05,           // web extension: soft edge of head box
   lip_cut: false,                      // web extension: split verts along the mouth line
   lip_cut_width_frac: 0.45,            // full slit width, fraction of head lateral size
-  mouth_open_height_frac: 0.10,         // procedural oval height for the generated mouth edge
-  mouth_segments: 28,                  // generated mouth edge resolution
-  rim_depth: 0.08,                     // inward/back extrusion depth, fraction of head front depth
-  rim_segments: 2,                     // loops across the inner lip rim
-  bevel_width: 0.025,                  // rounded lip edge width, fraction of head front depth
-  bevel_segments: 1,                   // loops rounding the outer lip edge
-  edge_smooth: 1,                      // laplacian smoothing passes for the generated mouth edge
+  // volumetric mouth (v0.4): densify + round the slit so it doesn't inherit
+  // the low-poly angularity, and give the lip edge real thickness
+  lip_subdiv: 3,                       // splits per seam edge (1 = off) — smooth opening arc
+  lip_rim: false,                      // extrude an inner lip rim + welded mouth pocket
+  rim_depth: 0.12,                     // how far the rim goes back (frac of head depth)
+  rim_segments: 2,                     // ring loops across the rim, 1..4
+  bevel_width: 0.03,                   // rounded lip-edge thickness (frac of head height)
+  bevel_segments: 2,                   // ring loops in the bevel arc, 0..3
+  edge_smooth: 3,                      // Laplacian iterations on the rim path (tames Meshy edges)
   add_pucker: true,                    // web extension: also emit a mouthPucker morph
   pucker_strength: 0.55,               // lateral squeeze toward mouth center, 0..1
   pucker_forward_frac: 0.06,           // forward lip push of the pucker (frac of head h)
@@ -112,9 +114,15 @@ export function jawDelta(positions, anchor, cfg, region, opts = {}) {
 
     // only below the mouth line drops
     let below = Math.min(1, Math.max(0, (mouth[1] - py) / belowScale));
+    // Hard gate for the cut mouth: verts clearly below the line move rigidly.
+    // Verts AT the line (knife/seam verts sit on it up to float error) take
+    // their side from the lowerMask alone — a bare `py < mouth` test fires on
+    // upper seam copies that land an ulp below the line, both sides move
+    // together, and the slit never separates.
+    const eps = 1e-3 * size[1];
     if (hardBelow && frontGate > 0.65 &&
         Math.abs(p[lat] - mouth[lat]) < latHalfWidth &&
-        (py < mouth[1] || (lowerMask && lowerMask[i]))) {
+        (py < mouth[1] - eps || (lowerMask && lowerMask[i]))) {
       below = 1; // the freed lower lip moves rigidly with the jaw
     }
 
@@ -183,10 +191,16 @@ export function cutLips(positions, indices, anchor, cfg, region) {
   for (let t = 0; t < triCount; t++) {
     const a = indices[t*3], b = indices[t*3+1], c = indices[t*3+2];
     const cy = (P(a,1) + P(b,1) + P(c,1)) / 3;
-    const cl = (P(a,lat) + P(b,lat) + P(c,lat)) / 3;
-    const cf = (P(a,fa) + P(b,fa) + P(c,fa)) / 3;
-    const frontGate = sign * (cf - mouth[fa] + sign * halfFront) / halfFront;
-    const inZone = Math.abs(cl - mouth[lat]) < halfW && frontGate > 0.65 &&
+    // vertex-based zone gates: low-poly triangles are huge, and knife-cut
+    // remnants keep far-away corners — a triangle is "in the zone" if it
+    // TOUCHES the slit window with any vertex and has a front-facing part.
+    // (Centroid gating here used to veto the seam split via USED_OUT.)
+    let minLat = Infinity, maxGate = -Infinity;
+    for (const v of [a, b, c]) {
+      minLat = Math.min(minLat, Math.abs(P(v,lat) - mouth[lat]));
+      maxGate = Math.max(maxGate, sign * (P(v,fa) - mouth[fa] + sign * halfFront) / halfFront);
+    }
+    const inZone = minLat < halfW && maxGate > 0.65 &&
                    inRegion(a) && inRegion(b) && inRegion(c);
     triSide[t] = inZone ? (cy < mouth[1] ? 2 : 1) : 0;
     if (triSide[t] === 2) lowTris++;
@@ -241,302 +255,601 @@ export function dupAttribute(src, itemSize, dupSources) {
   return out;
 }
 
-// Build the complete mouth-side topology mutation for one primitive:
-//   1) the legacy lip cut duplicates seam vertices where the source mesh is
-//      welded;
-//   2) a generated oval bevel/rim tunnel adds stable mouth-edge resolution
-//      independent of the source head polygon count.
+// -----------------------------------------------------------------------------
+// volumetric mouth (v0.4)
 //
-// The returned sourceForAdded list is used for every non-position attribute
-// (JOINTS_0, WEIGHTS_0, UVs, existing morph targets, etc.), so new vertices stay
-// bound to the same skin and animation as nearby head vertices.
-export function buildMouthGeometry(positions, indices, anchor, cfg, region) {
-  const baseCount = positions.length / 3;
-  const cut = cutLips(positions, indices, anchor, cfg, region);
-  const sourceForAdded = [];
-  let outIndices = cut ? cut.indices : Uint32Array.from(indices);
-  let outPositions = cut && cut.addedCount ? dupAttribute(positions, 3, cut.dupSources) : cloneTyped(positions);
-  let lowerMask = cut ? cut.lowerMask : new Uint8Array(baseCount);
-  const cutAdded = cut ? cut.addedCount : 0;
-  if (cut && cut.addedCount) {
-    for (const s of cut.dupSources) sourceForAdded.push(s);
-  }
-  const lowerDupBySource = new Map();
-  if (cut && cut.addedCount) {
-    for (let k = 0; k < cut.dupSources.length; k++) {
-      lowerDupBySource.set(cut.dupSources[k], baseCount + k);
-    }
-  }
+// Three cooperating passes turn the paper-thin low-poly slit into a mouth:
+//   1. subdivideSeam  — split every seam edge into `lip_subdiv` segments. New
+//      verts lie exactly on the old edges (rest pose unchanged, bit-for-bit),
+//      but the jaw gaussian now gets sampled densely along the lip line, so
+//      the opening becomes a smooth arc instead of a low-poly zigzag.
+//   2. cutLips        — unchanged (runs on the densified arrays).
+//   3. buildMouthVolume — extrude a bevel + inner rim strip backward from each
+//      side of the slit along a Laplacian-smoothed path (thick, rounded lip
+//      edges), and close the inside with a "pocket" whose opening ring reuses
+//      the rim's weld-ring data verbatim: identical positions, identical morph
+//      deltas, skinning copied from the same source verts — a real weld, no
+//      gap at any jawOpen value.
+//
+// Every generated vertex carries provenance {a, b, t}: it is a blend of source
+// verts a and b (b = -1 → pure copy of a). Attribute extension (UVs, normals,
+// JOINTS/WEIGHTS, pre-existing morph targets) and jaw/pucker deltas all flow
+// through provenance, so nothing new is ever left unskinned or morphless.
 
-  const shouldRim =
-    cfg.lip_cut &&
-    clampInt(cfg.mouth_segments, 8, 96) >= 8 &&
-    (num(cfg.rim_depth, 0) > 0 || num(cfg.bevel_width, 0) > 0);
+// "Coincident" duplicate verts on AI-exported meshes are NOT bit-identical —
+// on this project's characters mirrored copies drift by ~1e-4 of head height.
+// All seam matching therefore runs with a spatial tolerance, and canonical
+// edge direction is chosen by a tolerance-stable axis comparison.
+function seamTolerance(anchor) { return 5e-4 * anchor.size[1]; }
 
-  const aug = {
-    baseCount,
-    vertexCount: outPositions.length / 3,
-    positions: outPositions,
-    indices: outIndices,
-    lowerMask,
-    sourceForAdded: Uint32Array.from(sourceForAdded),
-    cutAdded,
-    rimAdded: 0,
-    generatedStart: outPositions.length / 3,
-    generatedCount: 0,
-    generatedMorphSources: new Uint32Array(0),
-    generatedJawScales: new Float32Array(0),
-    generatedPuckerScales: new Float32Array(0),
-    generatedNormals: null,
-    extraIndexStart: outIndices.length,
-    lowerDupBySource,
-  };
-
-  if (shouldRim) addGeneratedMouthRim(aug, positions, anchor, cfg, region);
-  if (!cut && !aug.rimAdded) return null;
-  return aug;
+function closePts(p, q, tol) {
+  return Math.abs(p[0]-q[0]) < tol && Math.abs(p[1]-q[1]) < tol && Math.abs(p[2]-q[2]) < tol;
 }
 
-export function augmentAttribute(src, itemSize, aug, semantic = '') {
-  if (!aug) return cloneTyped(src);
-  if (semantic === 'POSITION') return cloneTyped(aug.positions);
+// canonical edge direction: dominant-axis comparison with tolerance, so both
+// near-coincident copies of an edge pick the same order
+export function canonicalOrder(pa, pb, tol) {
+  for (const c of [0, 1, 2]) {
+    if (Math.abs(pa[c] - pb[c]) > tol) return pa[c] < pb[c];
+  }
+  return true;
+}
 
-  const out = new src.constructor(aug.vertexCount * itemSize);
-  out.set(src);
-  const sourceForAdded = aug.sourceForAdded || [];
-  const baseCount = aug.baseCount;
-  for (let k = 0; k < sourceForAdded.length; k++) {
-    const dst = baseCount + k;
-    const srcIdx = sourceForAdded[k];
-    for (let c = 0; c < itemSize; c++) {
-      out[dst * itemSize + c] = src[srcIdx * itemSize + c];
+// shared zone/side classification: seam edges are edges whose two coincident
+// copies belong to an upper-side and a lower-side triangle. The zone gate is
+// evaluated on the EDGE MIDPOINT (not the triangle centroid): low-poly
+// triangles are huge, and after seam subdivision the fan triangles' centroids
+// land far from the lip line even though their seam edges sit right on it.
+// The side (upper/lower) still comes from the owning triangle's centroid.
+// Returns an array of matched records:
+//   { up: [u,v], low: [l1,l2], upTri, lowTri, a: [xyz], b: [xyz] }
+// with `a`/`b` endpoint positions ordered like the `up` pair.
+function classifySeamEdges(positions, indices, anchor, cfg, region) {
+  const { mouth, size, fa, sign } = anchor;
+  const lat = lateralAxis(fa);
+  const halfW = 0.5 * cfg.lip_cut_width_frac * size[lat];
+  const halfFront = 0.5 * size[fa];
+  const tol = seamTolerance(anchor);
+  const triCount = (indices.length / 3) | 0;
+  const P = (i, a) => positions[i * 3 + a];
+  const pnt = (i) => [P(i,0), P(i,1), P(i,2)];
+  const inRegion = (i) => !region ||
+    (P(i,0) >= region.lo[0] && P(i,0) <= region.hi[0] &&
+     P(i,1) >= region.lo[1] && P(i,1) <= region.hi[1] &&
+     P(i,2) >= region.lo[2] && P(i,2) <= region.hi[2]);
+
+  // collect gated candidate edges, then cluster by midpoint+endpoints with
+  // tolerance (counts are tiny — tens of edges — linear matching is fine)
+  const clusters = [];
+  for (let t = 0; t < triCount; t++) {
+    const a = indices[t*3], b = indices[t*3+1], c = indices[t*3+2];
+    const cy = (P(a,1) + P(b,1) + P(c,1)) / 3;
+    const side = cy < mouth[1] ? 'low' : 'up';
+    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+      const ml = (P(u,lat) + P(v,lat)) / 2;
+      const mf = (P(u,fa) + P(v,fa)) / 2;
+      const frontGate = sign * (mf - mouth[fa] + sign * halfFront) / halfFront;
+      if (Math.abs(ml - mouth[lat]) >= halfW || frontGate <= 0.65 ||
+          !inRegion(u) || !inRegion(v)) continue;
+      const pu = pnt(u), pv = pnt(v);
+      const mid = [(pu[0]+pv[0])/2, (pu[1]+pv[1])/2, (pu[2]+pv[2])/2];
+      let cl = null;
+      for (const c2 of clusters) {
+        if (!closePts(mid, c2.mid, tol)) continue;
+        if ((closePts(pu, c2.a, tol) && closePts(pv, c2.b, tol)) ||
+            (closePts(pu, c2.b, tol) && closePts(pv, c2.a, tol))) { cl = c2; break; }
+      }
+      if (!cl) {
+        cl = { mid, a: pu, b: pv, up: null, low: null, upTri: -1, lowTri: -1 };
+        clusters.push(cl);
+      }
+      if (!cl[side]) {
+        // store the pair ordered to match cluster endpoints a→b
+        const straight = closePts(pu, cl.a, tol);
+        cl[side] = straight ? [u, v] : [v, u];
+        cl[side === 'up' ? 'upTri' : 'lowTri'] = t;
+      }
+    }
+  }
+  return clusters.filter((c) => c.up && c.low);
+}
+
+// Pass 0: knife cut. Stylized low-poly faces often paint the mouth onto 2-4
+// giant triangles — there ARE no edges along the lip line to split or open
+// (on this project's characters the up/low triangle boundary touches the
+// mouth window at just two edges near the corners). The knife slices every
+// triangle that straddles the mouth plane inside the slit window, creating a
+// dense straight seam right through triangle interiors. Decisions are made
+// PER EDGE (not per triangle) so both owners of an edge always agree —
+// no T-junctions, no cracks.
+export function knifeSeam(positions, indices, anchor, cfg, region) {
+  const { mouth, size, fa, sign } = anchor;
+  const lat = lateralAxis(fa);
+  const halfW = 0.5 * cfg.lip_cut_width_frac * size[lat];
+  const halfFront = 0.5 * size[fa];
+  const line = mouth[1];
+  const n = positions.length / 3;
+  const P = (i, a) => positions[i * 3 + a];
+  const inRegion = (p) => !region ||
+    (p[0] >= region.lo[0] && p[0] <= region.hi[0] &&
+     p[1] >= region.lo[1] && p[1] <= region.hi[1] &&
+     p[2] >= region.lo[2] && p[2] <= region.hi[2]);
+
+  // decide cut edges once, keyed by sorted index pair; coincident copies of an
+  // edge (unwelded meshes) compute t in canonical posKey order → identical bits
+  const prov = [];
+  const newPos = [];
+  const cutOfEdge = new Map(); // "a_b" (sorted indices) → new vertex index | -1
+  const tol = seamTolerance(anchor);
+  const cutPoint = (u, v) => {
+    const key = u < v ? `${u}_${v}` : `${v}_${u}`;
+    if (cutOfEdge.has(key)) return cutOfEdge.get(key);
+    let result = -1;
+    // canonical direction must be tolerance-stable so both near-coincident
+    // copies of an edge produce their knife point from the same end
+    const pu = [P(u,0), P(u,1), P(u,2)], pv = [P(v,0), P(v,1), P(v,2)];
+    const [a, b] = canonicalOrder(pu, pv, tol) ? [u, v] : [v, u];
+    const ya = P(a,1), yb = P(b,1);
+    if ((ya - line) * (yb - line) < 0) {
+      const t = (line - ya) / (yb - ya);
+      if (t > 1e-4 && t < 1 - 1e-4) {
+        const p = [0, 0, 0];
+        for (let c = 0; c < 3; c++) p[c] = P(a,c) + (P(b,c) - P(a,c)) * t;
+        const fg = sign * (p[fa] - mouth[fa] + sign * halfFront) / halfFront;
+        if (Math.abs(p[lat] - mouth[lat]) < halfW * 1.25 && fg > 0.65 && inRegion(p)) {
+          result = n + prov.length;
+          prov.push({ a, b, t });
+          newPos.push(...p);
+        }
+      }
+    }
+    cutOfEdge.set(key, result);
+    return result;
+  };
+
+  const out = [];
+  const triCount = (indices.length / 3) | 0;
+  let cuts = 0;
+  for (let t = 0; t < triCount; t++) {
+    const V = [indices[t*3], indices[t*3+1], indices[t*3+2]];
+    const cp = [cutPoint(V[0], V[1]), cutPoint(V[1], V[2]), cutPoint(V[2], V[0])];
+    const nCut = cp.filter((c) => c >= 0).length;
+    if (nCut === 0) {
+      out.push(...V);
+      continue;
+    }
+    cuts++;
+    if (nCut === 2) {
+      // apex = vertex shared by the two cut edges; rotate so edges are (A,B),(C,A)
+      let r = 0;
+      if (cp[0] >= 0 && cp[1] >= 0) r = 1;       // apex B
+      else if (cp[1] >= 0 && cp[2] >= 0) r = 2;  // apex C
+      const A = V[r], B = V[(r+1)%3], C = V[(r+2)%3];
+      const Pp = cp[r], Q = cp[(r+2)%3];
+      out.push(A, Pp, Q,  Pp, B, C,  Pp, C, Q);
+    } else {
+      // single qualified crossing: split through the opposite vertex
+      const e = cp.findIndex((c) => c >= 0);
+      const A = V[e], B = V[(e+1)%3], C = V[(e+2)%3];
+      out.push(A, cp[e], C,  cp[e], B, C);
+    }
+  }
+  if (!prov.length) return null;
+  return {
+    positions: concatF32(positions, newPos),
+    indices: Uint32Array.from(out),
+    prov,
+    cutTris: cuts,
+  };
+}
+
+// Pass 1: densify the lip line. Each seam edge is split into `lip_subdiv`
+// segments on BOTH of its coincident copies with bit-identical positions
+// (same lerp of coincident endpoints), so the shell stays sealed at rest.
+// Owning triangles are fan-retriangulated. Returns null when nothing to do.
+export function subdivideSeam(positions, indices, anchor, cfg, region) {
+  const segs = Math.max(1, Math.round(cfg.lip_subdiv));
+  if (segs < 2) return null;
+  const seam = classifySeamEdges(positions, indices, anchor, cfg, region);
+  if (!seam.length) return null;
+
+  const n = positions.length / 3;
+  const tol = seamTolerance(anchor);
+  const prov = [];              // {a, b, t} per new vertex
+  const newPos = [];
+  // per triangle: list of split edges → midpoints (vertex indices, ordered a→b)
+  const triSplits = new Map();  // tri → [{a, b, mids:[...]}]
+  const addSplits = (tri, a0, b0) => {
+    // canonical direction (tolerance-stable): the upper and lower coincident
+    // copies of a seam edge must lerp in the same order, or their split
+    // point sequences run opposite ways and the shell unseals at rest
+    const pa = [positions[a0*3], positions[a0*3+1], positions[a0*3+2]];
+    const pb = [positions[b0*3], positions[b0*3+1], positions[b0*3+2]];
+    const [a, b] = canonicalOrder(pa, pb, tol) ? [a0, b0] : [b0, a0];
+    const mids = [];
+    for (let s = 1; s < segs; s++) {
+      const t = s / segs;
+      const vi = n + prov.length;
+      prov.push({ a, b, t });
+      for (let c = 0; c < 3; c++) {
+        // lerp written as a+(b-a)*t so coincident copies produce identical bits
+        newPos.push(positions[a*3+c] + (positions[b*3+c] - positions[a*3+c]) * t);
+      }
+      mids.push(vi);
+    }
+    if (!triSplits.has(tri)) triSplits.set(tri, []);
+    triSplits.get(tri).push({ a, b, mids });
+    return mids;
+  };
+  for (const rec of seam) {
+    addSplits(rec.upTri, rec.up[0], rec.up[1]);
+    addSplits(rec.lowTri, rec.low[0], rec.low[1]);
+  }
+
+  // rebuild indices: untouched tris pass through, split tris become fans over
+  // their subdivided boundary polygon (fan corner = a vertex of an unsplit edge
+  // when possible; degenerate slivers from collinear points are harmless)
+  const out = [];
+  const triCount = (indices.length / 3) | 0;
+  for (let t = 0; t < triCount; t++) {
+    const splits = triSplits.get(t);
+    if (!splits) {
+      out.push(indices[t*3], indices[t*3+1], indices[t*3+2]);
+      continue;
+    }
+    const tri = [indices[t*3], indices[t*3+1], indices[t*3+2]];
+    const bySortedPair = new Map();
+    for (const s of splits) {
+      bySortedPair.set(s.a < s.b ? `${s.a}_${s.b}` : `${s.b}_${s.a}`, s);
+    }
+    // boundary polygon in original winding order
+    const poly = [];
+    const splitEdgeFlags = [];
+    for (let e = 0; e < 3; e++) {
+      const a = tri[e], b = tri[(e + 1) % 3];
+      poly.push(a);
+      const s = bySortedPair.get(a < b ? `${a}_${b}` : `${b}_${a}`);
+      splitEdgeFlags.push(!!s);
+      if (s) {
+        const mids = s.a === a ? s.mids : [...s.mids].reverse();
+        poly.push(...mids);
+      }
+    }
+    // pick fan corner on an unsplit edge boundary to minimize slivers
+    let corner = 0;
+    for (let e = 0; e < 3; e++) {
+      if (!splitEdgeFlags[e] && !splitEdgeFlags[(e + 2) % 3]) {
+        corner = poly.indexOf(tri[e]);
+        break;
+      }
+    }
+    const L = poly.length;
+    for (let i = 1; i < L - 1; i++) {
+      const p1 = poly[(corner + i) % L], p2 = poly[(corner + i + 1) % L];
+      out.push(poly[corner], p1, p2);
     }
   }
 
-  if (semantic === 'NORMAL' && itemSize === 3 && aug.generatedNormals) {
-    out.set(aug.generatedNormals, aug.generatedStart * 3);
+  return {
+    positions: concatF32(positions, newPos),
+    indices: Uint32Array.from(out),
+    prov,
+  };
+}
+
+// Ordered boundary of the mouth slit, corner to corner. Runs on post-cut
+// arrays; each point knows its upper-side and lower-side vertex index.
+export function extractMouthSeam(positions, indices, anchor, cfg, region) {
+  const seam = classifySeamEdges(positions, indices, anchor, cfg, region);
+  if (!seam.length) return null;
+  const tol = seamTolerance(anchor);
+
+  // endpoint clustering with tolerance (near-coincident copies drift ~1e-4)
+  const pts = []; // { pos, upperV, lowerV, adj: Set<index> }
+  const findPt = (p) => {
+    for (let i = 0; i < pts.length; i++) {
+      if (closePts(pts[i].pos, p, tol)) return i;
+    }
+    pts.push({ pos: [...p], upperV: -1, lowerV: -1, adj: new Set() });
+    return pts.length - 1;
+  };
+  for (const rec of seam) {
+    const ia = findPt(rec.a), ib = findPt(rec.b);
+    // up/low pairs were stored ordered to match rec.a → rec.b
+    pts[ia].upperV = rec.up[0]; pts[ib].upperV = rec.up[1];
+    pts[ia].lowerV = rec.low[0]; pts[ib].lowerV = rec.low[1];
+    pts[ia].adj.add(ib);
+    pts[ib].adj.add(ia);
+  }
+  // The seam graph can branch (knife line meeting natural up/low boundary
+  // edges) or split into components. Walk greedily from every degree-1 point,
+  // preferring the straightest continuation at branches; keep the longest path.
+  const walk = (startIdx) => {
+    const path = [];
+    const seen = new Set();
+    let cur = startIdx, dir = null;
+    while (cur != null && !seen.has(cur)) {
+      seen.add(cur);
+      const p = pts[cur];
+      path.push(p);
+      let best = null, bestDot = -Infinity;
+      for (const a of p.adj) {
+        if (seen.has(a)) continue;
+        const q = pts[a].pos;
+        const d = [q[0]-p.pos[0], q[1]-p.pos[1], q[2]-p.pos[2]];
+        const l = Math.hypot(...d) || 1;
+        const dot = dir ? (d[0]*dir[0] + d[1]*dir[1] + d[2]*dir[2]) / l : 0;
+        if (dot > bestDot) { bestDot = dot; best = a; }
+      }
+      if (best != null) {
+        const q = pts[best].pos;
+        const d = [q[0]-p.pos[0], q[1]-p.pos[1], q[2]-p.pos[2]];
+        const l = Math.hypot(...d) || 1;
+        dir = [d[0]/l, d[1]/l, d[2]/l];
+      }
+      cur = best;
+    }
+    return path;
+  };
+  const starts = pts.map((p, i) => [p, i]).filter(([p]) => p.adj.size === 1).map(([, i]) => i);
+  if (!starts.length) starts.push(0);
+  let ordered = [];
+  for (const s of starts) {
+    const path = walk(s);
+    if (path.length > ordered.length) ordered = path;
+  }
+  if (ordered.length < 4) return null;
+  for (const p of ordered) {
+    if (p.upperV < 0) p.upperV = p.lowerV;
+    if (p.lowerV < 0) p.lowerV = p.upperV;
+  }
+  return { points: ordered };
+}
+
+// Pass 3: bevel + inner rim strips from both sides of the slit, plus the
+// welded pocket. Rings follow a Laplacian-smoothed copy of the seam path so
+// jagged Meshy edges come out rounded. Offsets fade to zero at the mouth
+// corners (rings collapse onto the corner verts → watertight ends).
+//
+// Returns {
+//   verts: [{ src, pos:[3], scale }],   // src = post-cut vertex index
+//   tris:  Uint32Array,                 // indices into post-cut + new verts
+//   pocket: { verts: [{src, pos, scale}], tris: Uint32Array },
+// } or null when no seam.
+export function buildMouthVolume(positions, indices, anchor, cfg, region) {
+  const seamData = extractMouthSeam(positions, indices, anchor, cfg, region);
+  if (!seamData) return null;
+  const pts = seamData.points;
+  const m = pts.length - 1;
+  const { mouth, size, fa, sign } = anchor;
+
+  // smoothed extrusion path (endpoints pinned)
+  const S = pts.map((p) => [...p.pos]);
+  for (let it = 0; it < Math.round(cfg.edge_smooth); it++) {
+    for (let i = 1; i < m; i++) {
+      for (let c = 0; c < 3; c++) {
+        S[i][c] = 0.5 * S[i][c] + 0.25 * (S[i-1][c] + S[i+1][c]);
+      }
+    }
+  }
+
+  const B = Math.max(0, Math.round(cfg.bevel_segments));
+  const R = Math.max(1, Math.round(cfg.rim_segments));
+  const bevelW = B > 0 ? cfg.bevel_width * size[1] : 0;
+  const rimD = cfg.rim_depth * size[fa];
+  const front = [0, 0, 0]; front[fa] = sign;
+  const cornerW = (i) => Math.pow(Math.sin(Math.PI * i / m), 0.7);
+
+  const nBase = positions.length / 3;
+  const verts = [];   // head-primitive strip verts { src, pos, scale }
+  const tris = [];
+  const vPos = (vi) => vi < nBase
+    ? [positions[vi*3], positions[vi*3+1], positions[vi*3+2]]
+    : verts[vi - nBase].pos;
+
+  // BEVEL strip only lives in the (textured) head primitive: a ~lip-thick
+  // rounded edge that keeps the skin texture. Everything deeper — the rim
+  // walls and the pocket — is dark, so the stretched face texture never
+  // smears into the mouth interior. Bevel verts move rigidly with their lip
+  // (scale 1): the lip edge stays crisp at any jawOpen.
+  const buildBevel = (sideKey, vertSign) => {
+    const rings = [pts.map((p) => p[sideKey])];
+    for (let k = 1; k <= B; k++) {
+      const bp = k / B;
+      const back = bevelW * Math.sin(bp * Math.PI / 2);
+      const vert = vertSign * bevelW * (1 - Math.cos(bp * Math.PI / 2));
+      const ring = [];
+      for (let i = 0; i <= m; i++) {
+        const w = cornerW(i);
+        const pos = [S[i][0], S[i][1], S[i][2]];
+        pos[1] += vert * w;
+        pos[fa] -= sign * back * w;
+        const vi = nBase + verts.length;
+        verts.push({ src: pts[i][sideKey], pos, scale: 1 });
+        ring.push(vi);
+      }
+      rings.push(ring);
+    }
+    // quads; winding faces the opening (down-front for upper, up-front for lower)
+    const want = [front[0], front[1] - vertSign * 0.6, front[2]];
+    let flip = null;
+    for (let k = 1; k <= B; k++) {
+      for (let i = 0; i < m; i++) {
+        const a = rings[k-1][i], b = rings[k-1][i+1], c = rings[k][i+1], d = rings[k][i];
+        if (flip === null) {
+          const nrm = triNormal(vPos(a), vPos(b), vPos(c));
+          if (nrm) flip = (nrm[0]*want[0] + nrm[1]*want[1] + nrm[2]*want[2]) < 0;
+        }
+        if (flip) tris.push(a, c, b, a, d, c);
+        else tris.push(a, b, c, a, c, d);
+      }
+    }
+    return rings[rings.length - 1]; // weld ring (ring0 itself when B = 0)
+  };
+
+  const upperWeld = buildBevel('upperV', +1);
+  const lowerWeld = buildBevel('lowerV', -1);
+
+  // POCKET (dark primitive): starts at a closed loop that reuses the bevel
+  // weld-ring records verbatim — identical positions, sources and delta
+  // scales, so the weld is exact at any jawOpen. The loop is extruded
+  // backward (rim walls, delta fading 1 → 0.55) and then converges to a
+  // rounded cap (0.55 → 0).
+  const weldRec = (vi) => vi < nBase
+    ? { src: vi, pos: vPos(vi), scale: 1 }
+    : verts[vi - nBase];
+  const loop = [];        // { rec, vertSign, w }
+  for (let i = 0; i <= m; i++) loop.push({ rec: weldRec(upperWeld[i]), vs: +1, w: cornerW(i) });
+  for (let i = m - 1; i >= 1; i--) loop.push({ rec: weldRec(lowerWeld[i]), vs: -1, w: cornerW(i) });
+  const L = loop.length;
+
+  const pocketVerts = loop.map(({ rec }) => ({ src: rec.src, pos: [...rec.pos], scale: rec.scale }));
+  const pocketTris = [];
+
+  // rim walls: straight back, keeping the bevel's vertical separation.
+  // delta scale = lerp(1, 0.55, t), eased back to 1 at the corners (w → 0)
+  // where the rings collapse onto the corner verts.
+  for (let j = 1; j <= R; j++) {
+    const t = j / R;
+    for (const { rec, w } of loop) {
+      const pos = [...rec.pos];
+      pos[fa] -= sign * rimD * t * w;
+      pocketVerts.push({ src: rec.src, pos, scale: 1 - 0.45 * t * w });
+    }
+  }
+
+  // converge to the cap
+  const center = [...mouth];
+  center[fa] -= sign * (rimD + cfg.cavity_depth_frac * size[fa] * 0.6);
+  center[1] = loop.reduce((s, { rec }) => s + rec.pos[1], 0) / L;
+  const PJ = 3;
+  const rimBase = R * L; // offset of the last rim ring within pocketVerts
+  for (let j = 1; j <= PJ; j++) {
+    const a = j / PJ;
+    const ease = a * a * (3 - 2 * a);
+    for (let i = 0; i < L; i++) {
+      const r = pocketVerts[rimBase + i];
+      pocketVerts.push({
+        src: r.src,
+        pos: [
+          r.pos[0] + (center[0] - r.pos[0]) * ease,
+          r.pos[1] + (center[1] - r.pos[1]) * ease,
+          r.pos[2] + (center[2] - r.pos[2]) * ease,
+        ],
+        scale: r.scale * (1 - ease),
+      });
+    }
+  }
+  const capIdx = pocketVerts.length;
+  pocketVerts.push({ src: loop[0].rec.src, pos: [...center], scale: 0 });
+
+  // tube + cap, winding so the interior faces the opening (toward +front)
+  const rings = R + PJ;
+  let flip = null;
+  for (let j = 0; j < rings; j++) {
+    for (let i = 0; i < L; i++) {
+      const i2 = (i + 1) % L;
+      const a = j*L + i, b = j*L + i2, c = (j+1)*L + i2, d = (j+1)*L + i;
+      if (flip === null) {
+        const nrm = triNormal(pocketVerts[a].pos, pocketVerts[b].pos, pocketVerts[c].pos);
+        if (nrm) flip = (nrm[0]*front[0] + nrm[1]*front[1] + nrm[2]*front[2]) < 0;
+      }
+      if (flip) pocketTris.push(a, c, b, a, d, c);
+      else pocketTris.push(a, b, c, a, c, d);
+    }
+  }
+  for (let i = 0; i < L; i++) {
+    const i2 = (i + 1) % L;
+    if (flip) pocketTris.push(rings*L + i, rings*L + i2, capIdx);
+    else pocketTris.push(rings*L + i2, rings*L + i, capIdx);
+  }
+
+  return {
+    verts,
+    tris: Uint32Array.from(tris),
+    pocket: { verts: pocketVerts, tris: Uint32Array.from(pocketTris) },
+  };
+}
+
+function triNormal(p, q, r) {
+  const u = [q[0]-p[0], q[1]-p[1], q[2]-p[2]];
+  const v = [r[0]-p[0], r[1]-p[1], r[2]-p[2]];
+  const n = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
+  const l = Math.hypot(n[0], n[1], n[2]);
+  return l > 1e-12 ? [n[0]/l, n[1]/l, n[2]/l] : null;
+}
+
+function concatF32(a, extra) {
+  const out = new Float32Array(a.length + extra.length);
+  out.set(a);
+  out.set(extra, a.length);
+  return out;
+}
+
+// Extend a per-vertex attribute array through provenance records. Each record
+// is a weighted list of ORIGINAL source verts [[index, weight], ...] (weights
+// sum to 1) — chains like knife → subdiv → rim flatten into one such list.
+// mode 'lerp'    — weighted blend (UVs, normals, colors, morph deltas)
+// mode 'nearest' — copy from the heaviest source (JOINTS/WEIGHTS: never blend
+//                  bone indices; weights follow their joint set)
+export function extendAttributeData(src, itemSize, prov, mode = 'lerp') {
+  const n = src.length / itemSize;
+  const out = new src.constructor((n + prov.length) * itemSize);
+  out.set(src);
+  for (let k = 0; k < prov.length; k++) {
+    const refs = prov[k];
+    const o = (n + k) * itemSize;
+    if (mode === 'nearest' || refs.length === 1) {
+      let best = refs[0];
+      for (const r of refs) if (r[1] > best[1]) best = r;
+      for (let c = 0; c < itemSize; c++) out[o + c] = src[best[0] * itemSize + c];
+    } else {
+      const acc = new Array(itemSize).fill(0);
+      for (const [i, w] of refs) {
+        for (let c = 0; c < itemSize; c++) acc[c] += src[i * itemSize + c] * w;
+      }
+      for (let c = 0; c < itemSize; c++) out[o + c] = acc[c];
+    }
   }
   return out;
 }
 
-export function applyAugmentedMorphDeltas(delta, aug, kind = 'jaw') {
-  if (!aug || !aug.generatedCount) return;
-  const scales = kind === 'pucker' ? aug.generatedPuckerScales : aug.generatedJawScales;
-  for (let i = 0; i < aug.generatedCount; i++) {
-    const dst = aug.generatedStart + i;
-    const src = aug.generatedMorphSources[i];
-    const s = scales[i];
-    delta[dst * 3] = delta[src * 3] * s;
-    delta[dst * 3 + 1] = delta[src * 3 + 1] * s;
-    delta[dst * 3 + 2] = delta[src * 3 + 2] * s;
-  }
+// merge two provenance lists with lerp factor t (result references originals)
+export function blendProv(pa, pb, t) {
+  const acc = new Map();
+  for (const [i, w] of pa) acc.set(i, (acc.get(i) || 0) + w * (1 - t));
+  for (const [i, w] of pb) acc.set(i, (acc.get(i) || 0) + w * t);
+  return [...acc.entries()];
 }
 
-export function measureDelta(delta) {
-  let driven = 0, maxOffset = 0;
-  for (let i = 0; i < delta.length; i += 3) {
-    const off = Math.hypot(delta[i], delta[i + 1], delta[i + 2]);
-    if (off > 1e-4) driven++;
-    if (off > maxOffset) maxOffset = off;
-  }
-  return { driven, maxOffset };
-}
-
-function addGeneratedMouthRim(aug, sourcePositions, anchor, cfg, region) {
-  const { mouth, size, fa, sign } = anchor;
-  const lat = lateralAxis(fa);
-  const segments = clampInt(cfg.mouth_segments, 8, 96);
-  const bevelSegments = clampInt(cfg.bevel_segments, 0, 4);
-  const rimSegments = clampInt(cfg.rim_segments, 1, 4);
-  const ringCount = 1 + bevelSegments + rimSegments;
-  const halfW = Math.max(1e-6, 0.5 * cfg.lip_cut_width_frac * size[lat]);
-  const radiusY = Math.max(1e-6, num(cfg.mouth_open_height_frac, 0.1) * size[1]);
-  const axisDepth = Math.max(1e-6, size[fa]);
-  const frontInset = 0.006 * axisDepth;
-  const totalDepth = Math.max(0.001 * axisDepth, num(cfg.rim_depth, 0.08) * axisDepth);
-  const bevelInset = Math.min(0.45 * halfW, num(cfg.bevel_width, 0.025) * axisDepth);
-  const smoothIters = clampInt(cfg.edge_smooth, 0, 8);
-
-  const outer = [];
-  for (let j = 0; j < segments; j++) {
-    const theta = (j / segments) * Math.PI * 2;
-    const p = [...mouth];
-    p[lat] += Math.cos(theta) * halfW;
-    p[1] += Math.sin(theta) * radiusY;
-    p[fa] -= sign * frontInset;
-    outer.push(p);
-  }
-  smoothClosedLoop(outer, smoothIters);
-
-  const sources = outer.map((p) => nearestMouthSource(sourcePositions, p, anchor, cfg, region, p[1] < mouth[1]));
-  const pos = Array.from(aug.positions);
-  const idx = Array.from(aug.indices);
-  const lower = Array.from(aug.lowerMask);
-  const sourceForAdded = Array.from(aug.sourceForAdded);
-  const morphSources = [];
-  const jawScales = [];
-  const puckerScales = [];
-  const rings = [];
-
-  aug.generatedStart = aug.vertexCount;
-  const makeVertex = (p, source, jawScale, puckerScale) => {
-    const v = pos.length / 3;
-    pos.push(p[0], p[1], p[2]);
-    lower.push(jawScale > 0.28 ? 1 : 0);
-    sourceForAdded.push(source);
-    morphSources.push(jawScale > 0.1 && aug.lowerDupBySource?.has(source)
-      ? aug.lowerDupBySource.get(source)
-      : source);
-    jawScales.push(jawScale);
-    puckerScales.push(puckerScale);
-    return v;
-  };
-
-  for (let r = 0; r < ringCount; r++) {
-    const t = ringCount === 1 ? 0 : r / (ringCount - 1);
-    const eased = smoothstep01(t);
-    const bevelT = bevelSegments ? Math.min(1, r / (bevelSegments + 1)) : (r > 0 ? 1 : 0);
-    const radialInset = bevelInset * smoothstep01(bevelT) + 0.04 * halfW * eased;
-    const latScale = Math.max(0.15, (halfW - radialInset) / halfW);
-    const yScale = Math.max(0.20, (radiusY - radialInset * 0.65) / radiusY);
-    const depth = frontInset + totalDepth * eased;
-    const ring = [];
-    for (let j = 0; j < segments; j++) {
-      const theta = (j / segments) * Math.PI * 2;
-      const sin = Math.sin(theta);
-      const radial = outer[j];
-      const p = [...mouth];
-      p[lat] = mouth[lat] + (radial[lat] - mouth[lat]) * latScale;
-      p[1] = mouth[1] + (radial[1] - mouth[1]) * yScale;
-      p[fa] = mouth[fa] - sign * depth;
-
-      const lowerAmount = clamp01((0.18 - sin) / 1.18);
-      const jawScale = lowerAmount * (1 - 0.72 * eased);
-      const puckerScale = 1 - 0.55 * eased;
-      ring.push(makeVertex(p, sources[j], jawScale, puckerScale));
-    }
-    rings.push(ring);
-  }
-
-  const extraIndexStart = idx.length;
-  const getP = (v) => [pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]];
-  const pushInwardTri = (a, b, c) => {
-    const pa = getP(a), pb = getP(b), pc = getP(c);
-    const n = cross(sub(pb, pa), sub(pc, pa));
-    const mid = [(pa[0] + pb[0] + pc[0]) / 3, (pa[1] + pb[1] + pc[1]) / 3, (pa[2] + pb[2] + pc[2]) / 3];
-    const radialOut = [0, 0, 0];
-    radialOut[lat] = mid[lat] - mouth[lat];
-    radialOut[1] = mid[1] - mouth[1];
-    if (dot(n, radialOut) > 0) idx.push(a, c, b);
-    else idx.push(a, b, c);
-  };
-
-  for (let r = 0; r < rings.length - 1; r++) {
-    for (let j = 0; j < segments; j++) {
-      const jn = (j + 1) % segments;
-      const a = rings[r][j], b = rings[r][jn], c = rings[r + 1][j], d = rings[r + 1][jn];
-      pushInwardTri(a, b, c);
-      pushInwardTri(b, d, c);
+// Area-weighted smooth normals for the verts in [from, to) using only the
+// given triangles (existing verts keep their original normals). Verts whose
+// incident triangles are all degenerate (collapsed corner rings) get the
+// fallback direction — they are invisible anyway, but must stay unit-length.
+export function computeNormalsFor(positions, tris, from, to, fallback = [0, 0, 1]) {
+  const acc = new Float32Array((to - from) * 3);
+  for (let t = 0; t < tris.length; t += 3) {
+    const [a, b, c] = [tris[t], tris[t+1], tris[t+2]];
+    const p = (i) => [positions[i*3], positions[i*3+1], positions[i*3+2]];
+    const pa = p(a), pb = p(b), pc = p(c);
+    const u = [pb[0]-pa[0], pb[1]-pa[1], pb[2]-pa[2]];
+    const v = [pc[0]-pa[0], pc[1]-pa[1], pc[2]-pa[2]];
+    const nx = u[1]*v[2]-u[2]*v[1], ny = u[2]*v[0]-u[0]*v[2], nz = u[0]*v[1]-u[1]*v[0];
+    for (const i of [a, b, c]) {
+      if (i >= from && i < to) {
+        acc[(i-from)*3] += nx; acc[(i-from)*3+1] += ny; acc[(i-from)*3+2] += nz;
+      }
     }
   }
-
-  const generatedCount = pos.length / 3 - aug.generatedStart;
-  const generatedNormals = new Float32Array(generatedCount * 3);
-  for (let i = extraIndexStart; i < idx.length; i += 3) {
-    const a = idx[i], b = idx[i + 1], c = idx[i + 2];
-    const n = normalize(cross(sub(getP(b), getP(a)), sub(getP(c), getP(a))));
-    for (const v of [a, b, c]) {
-      if (v < aug.generatedStart) continue;
-      const o = (v - aug.generatedStart) * 3;
-      generatedNormals[o] += n[0];
-      generatedNormals[o + 1] += n[1];
-      generatedNormals[o + 2] += n[2];
+  for (let i = 0; i < acc.length; i += 3) {
+    const l = Math.hypot(acc[i], acc[i+1], acc[i+2]);
+    if (l < 1e-12) {
+      acc[i] = fallback[0]; acc[i+1] = fallback[1]; acc[i+2] = fallback[2];
+    } else {
+      acc[i] /= l; acc[i+1] /= l; acc[i+2] /= l;
     }
   }
-  for (let i = 0; i < generatedNormals.length; i += 3) {
-    const n = normalize([generatedNormals[i], generatedNormals[i + 1], generatedNormals[i + 2]]);
-    generatedNormals[i] = n[0]; generatedNormals[i + 1] = n[1]; generatedNormals[i + 2] = n[2];
-  }
-
-  aug.positions = Float32Array.from(pos);
-  aug.indices = Uint32Array.from(idx);
-  aug.lowerMask = Uint8Array.from(lower);
-  aug.sourceForAdded = Uint32Array.from(sourceForAdded);
-  aug.vertexCount = aug.positions.length / 3;
-  aug.rimAdded = generatedCount;
-  aug.generatedCount = generatedCount;
-  aug.generatedMorphSources = Uint32Array.from(morphSources);
-  aug.generatedJawScales = Float32Array.from(jawScales);
-  aug.generatedPuckerScales = Float32Array.from(puckerScales);
-  aug.generatedNormals = generatedNormals;
-  aug.extraIndexStart = extraIndexStart;
-}
-
-function nearestMouthSource(positions, target, anchor, cfg, region, preferLower) {
-  const { mouth, size, fa, sign } = anchor;
-  const lat = lateralAxis(fa);
-  const n = positions.length / 3;
-  const halfW = 0.75 * cfg.lip_cut_width_frac * size[lat];
-  const yWin = Math.max(0.18 * size[1], 2.2 * num(cfg.mouth_open_height_frac, 0.1) * size[1]);
-  const halfFront = 0.5 * size[fa];
-  let best = -1, bestScore = Infinity, fallback = -1, fallbackScore = Infinity;
-  for (let i = 0; i < n; i++) {
-    const p = [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]];
-    if (region && (p[0] < region.lo[0] || p[0] > region.hi[0] ||
-                   p[1] < region.lo[1] || p[1] > region.hi[1] ||
-                   p[2] < region.lo[2] || p[2] > region.hi[2])) continue;
-    const d2 = dist2(p, target);
-    if (d2 < fallbackScore) { fallbackScore = d2; fallback = i; }
-    const frontGate = sign * (p[fa] - mouth[fa] + sign * halfFront) / halfFront;
-    if (frontGate < 0.45) continue;
-    if (Math.abs(p[lat] - mouth[lat]) > halfW) continue;
-    if (Math.abs(p[1] - mouth[1]) > yWin) continue;
-    const wrongSide = preferLower ? p[1] > mouth[1] : p[1] < mouth[1];
-    const sidePenalty = wrongSide ? size[1] * size[1] * 0.22 : 0;
-    const score = d2 + sidePenalty;
-    if (score < bestScore) { bestScore = score; best = i; }
-  }
-  return best >= 0 ? best : Math.max(0, fallback);
-}
-
-function smoothClosedLoop(points, iterations) {
-  const n = points.length;
-  for (let it = 0; it < iterations; it++) {
-    const next = points.map((p, i) => {
-      const a = points[(i + n - 1) % n], b = points[(i + 1) % n];
-      return [
-        p[0] * 0.5 + (a[0] + b[0]) * 0.25,
-        p[1] * 0.5 + (a[1] + b[1]) * 0.25,
-        p[2] * 0.5 + (a[2] + b[2]) * 0.25,
-      ];
-    });
-    for (let i = 0; i < n; i++) points[i] = next[i];
-  }
-}
-
-function num(v, fallback) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-function clamp01(v) { return Math.max(0, Math.min(1, v)); }
-function clampInt(v, lo, hi) {
-  return Math.max(lo, Math.min(hi, Math.round(num(v, lo))));
-}
-function smoothstep01(t) {
-  t = clamp01(t);
-  return t * t * (3 - 2 * t);
-}
-function cloneTyped(src) {
-  return src.slice ? src.slice() : new src.constructor(src);
-}
-function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
-function cross(a, b) {
-  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-}
-function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-function dist2(a, b) {
-  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
-  return dx * dx + dy * dy + dz * dz;
+  return acc;
 }
 
 // -----------------------------------------------------------------------------
