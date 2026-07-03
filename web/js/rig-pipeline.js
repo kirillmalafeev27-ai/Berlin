@@ -4,7 +4,8 @@
 // drift apart.
 
 import {
-  mergeCfg, mouthAnchor, jawDelta, puckerDelta, cutLips, dupAttribute,
+  mergeCfg, mouthAnchor, jawDelta, puckerDelta, buildMouthGeometry,
+  applyAugmentedMorphDeltas, measureDelta,
   cavityAndTonguePlacement, boundsInBox, bakeEllipsoid,
 } from './facerig-core.js';
 import {
@@ -50,26 +51,31 @@ export function rigGLB(arrayBuffer, configReport) {
   const anchor = mouthAnchor(headBounds, cfg);
 
   // lip cut first (changes vertex counts), then morph deltas
-  const stats = { head_vertices: headBounds.count, driven: 0, cut_added: 0, maxOffset: 0 };
+  const stats = { head_vertices: headBounds.count, driven: 0, cut_added: 0, rim_added: 0, maxOffset: 0 };
   const jawDeltas = [], puckerDeltas = [];
   prims.forEach(({ positions, indices }, pi) => {
-    let mask = null, pos = positions;
+    let mask = null, pos = positions, aug = null;
     if (cfg.lip_cut) {
-      const cut = cutLips(pos, indices, anchor, cfg, region);
-      if (cut) {
-        if (cut.addedCount) { // welded mesh: actual vertex split needed
-          patcher.replaceCutGeometry(meshIndex, pi, cut.dupSources, cut.indices);
-          pos = dupAttribute(pos, 3, cut.dupSources);
-          stats.cut_added += cut.addedCount;
-        }
-        mask = cut.lowerMask; // unwelded mesh: the mask alone opens the slit
+      aug = buildMouthGeometry(pos, indices, anchor, cfg, region);
+      if (aug) {
+        patcher.replaceAugmentedGeometry(meshIndex, pi, aug);
+        pos = aug.positions;
+        stats.cut_added += aug.cutAdded;
+        stats.rim_added += aug.rimAdded;
+        mask = aug.lowerMask; // unwelded mesh: the mask alone opens the slit
       }
     }
     const jaw = jawDelta(pos, anchor, cfg, region, { lowerMask: mask, hardBelow: cfg.lip_cut });
-    stats.driven += jaw.driven;
-    stats.maxOffset = Math.max(stats.maxOffset, jaw.maxOffset);
+    applyAugmentedMorphDeltas(jaw.delta, aug, 'jaw');
+    const measuredJaw = measureDelta(jaw.delta);
+    stats.driven += measuredJaw.driven;
+    stats.maxOffset = Math.max(stats.maxOffset, measuredJaw.maxOffset);
     jawDeltas.push(jaw.delta);
-    if (cfg.add_pucker) puckerDeltas.push(puckerDelta(pos, anchor, cfg, region));
+    if (cfg.add_pucker) {
+      const puck = puckerDelta(pos, anchor, cfg, region);
+      applyAugmentedMorphDeltas(puck, aug, 'pucker');
+      puckerDeltas.push(puck);
+    }
   });
 
   const morphs = [{ name: 'jawOpen', deltasPerPrimitive: jawDeltas }];

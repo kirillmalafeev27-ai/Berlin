@@ -24,6 +24,13 @@ export const DEFAULT_CFG = {
   region_falloff_frac: 0.05,           // web extension: soft edge of head box
   lip_cut: false,                      // web extension: split verts along the mouth line
   lip_cut_width_frac: 0.45,            // full slit width, fraction of head lateral size
+  mouth_open_height_frac: 0.10,         // procedural oval height for the generated mouth edge
+  mouth_segments: 28,                  // generated mouth edge resolution
+  rim_depth: 0.08,                     // inward/back extrusion depth, fraction of head front depth
+  rim_segments: 2,                     // loops across the inner lip rim
+  bevel_width: 0.025,                  // rounded lip edge width, fraction of head front depth
+  bevel_segments: 1,                   // loops rounding the outer lip edge
+  edge_smooth: 1,                      // laplacian smoothing passes for the generated mouth edge
   add_pucker: true,                    // web extension: also emit a mouthPucker morph
   pucker_strength: 0.55,               // lateral squeeze toward mouth center, 0..1
   pucker_forward_frac: 0.06,           // forward lip push of the pucker (frac of head h)
@@ -232,6 +239,304 @@ export function dupAttribute(src, itemSize, dupSources) {
     }
   }
   return out;
+}
+
+// Build the complete mouth-side topology mutation for one primitive:
+//   1) the legacy lip cut duplicates seam vertices where the source mesh is
+//      welded;
+//   2) a generated oval bevel/rim tunnel adds stable mouth-edge resolution
+//      independent of the source head polygon count.
+//
+// The returned sourceForAdded list is used for every non-position attribute
+// (JOINTS_0, WEIGHTS_0, UVs, existing morph targets, etc.), so new vertices stay
+// bound to the same skin and animation as nearby head vertices.
+export function buildMouthGeometry(positions, indices, anchor, cfg, region) {
+  const baseCount = positions.length / 3;
+  const cut = cutLips(positions, indices, anchor, cfg, region);
+  const sourceForAdded = [];
+  let outIndices = cut ? cut.indices : Uint32Array.from(indices);
+  let outPositions = cut && cut.addedCount ? dupAttribute(positions, 3, cut.dupSources) : cloneTyped(positions);
+  let lowerMask = cut ? cut.lowerMask : new Uint8Array(baseCount);
+  const cutAdded = cut ? cut.addedCount : 0;
+  if (cut && cut.addedCount) {
+    for (const s of cut.dupSources) sourceForAdded.push(s);
+  }
+  const lowerDupBySource = new Map();
+  if (cut && cut.addedCount) {
+    for (let k = 0; k < cut.dupSources.length; k++) {
+      lowerDupBySource.set(cut.dupSources[k], baseCount + k);
+    }
+  }
+
+  const shouldRim =
+    cfg.lip_cut &&
+    clampInt(cfg.mouth_segments, 8, 96) >= 8 &&
+    (num(cfg.rim_depth, 0) > 0 || num(cfg.bevel_width, 0) > 0);
+
+  const aug = {
+    baseCount,
+    vertexCount: outPositions.length / 3,
+    positions: outPositions,
+    indices: outIndices,
+    lowerMask,
+    sourceForAdded: Uint32Array.from(sourceForAdded),
+    cutAdded,
+    rimAdded: 0,
+    generatedStart: outPositions.length / 3,
+    generatedCount: 0,
+    generatedMorphSources: new Uint32Array(0),
+    generatedJawScales: new Float32Array(0),
+    generatedPuckerScales: new Float32Array(0),
+    generatedNormals: null,
+    extraIndexStart: outIndices.length,
+    lowerDupBySource,
+  };
+
+  if (shouldRim) addGeneratedMouthRim(aug, positions, anchor, cfg, region);
+  if (!cut && !aug.rimAdded) return null;
+  return aug;
+}
+
+export function augmentAttribute(src, itemSize, aug, semantic = '') {
+  if (!aug) return cloneTyped(src);
+  if (semantic === 'POSITION') return cloneTyped(aug.positions);
+
+  const out = new src.constructor(aug.vertexCount * itemSize);
+  out.set(src);
+  const sourceForAdded = aug.sourceForAdded || [];
+  const baseCount = aug.baseCount;
+  for (let k = 0; k < sourceForAdded.length; k++) {
+    const dst = baseCount + k;
+    const srcIdx = sourceForAdded[k];
+    for (let c = 0; c < itemSize; c++) {
+      out[dst * itemSize + c] = src[srcIdx * itemSize + c];
+    }
+  }
+
+  if (semantic === 'NORMAL' && itemSize === 3 && aug.generatedNormals) {
+    out.set(aug.generatedNormals, aug.generatedStart * 3);
+  }
+  return out;
+}
+
+export function applyAugmentedMorphDeltas(delta, aug, kind = 'jaw') {
+  if (!aug || !aug.generatedCount) return;
+  const scales = kind === 'pucker' ? aug.generatedPuckerScales : aug.generatedJawScales;
+  for (let i = 0; i < aug.generatedCount; i++) {
+    const dst = aug.generatedStart + i;
+    const src = aug.generatedMorphSources[i];
+    const s = scales[i];
+    delta[dst * 3] = delta[src * 3] * s;
+    delta[dst * 3 + 1] = delta[src * 3 + 1] * s;
+    delta[dst * 3 + 2] = delta[src * 3 + 2] * s;
+  }
+}
+
+export function measureDelta(delta) {
+  let driven = 0, maxOffset = 0;
+  for (let i = 0; i < delta.length; i += 3) {
+    const off = Math.hypot(delta[i], delta[i + 1], delta[i + 2]);
+    if (off > 1e-4) driven++;
+    if (off > maxOffset) maxOffset = off;
+  }
+  return { driven, maxOffset };
+}
+
+function addGeneratedMouthRim(aug, sourcePositions, anchor, cfg, region) {
+  const { mouth, size, fa, sign } = anchor;
+  const lat = lateralAxis(fa);
+  const segments = clampInt(cfg.mouth_segments, 8, 96);
+  const bevelSegments = clampInt(cfg.bevel_segments, 0, 4);
+  const rimSegments = clampInt(cfg.rim_segments, 1, 4);
+  const ringCount = 1 + bevelSegments + rimSegments;
+  const halfW = Math.max(1e-6, 0.5 * cfg.lip_cut_width_frac * size[lat]);
+  const radiusY = Math.max(1e-6, num(cfg.mouth_open_height_frac, 0.1) * size[1]);
+  const axisDepth = Math.max(1e-6, size[fa]);
+  const frontInset = 0.006 * axisDepth;
+  const totalDepth = Math.max(0.001 * axisDepth, num(cfg.rim_depth, 0.08) * axisDepth);
+  const bevelInset = Math.min(0.45 * halfW, num(cfg.bevel_width, 0.025) * axisDepth);
+  const smoothIters = clampInt(cfg.edge_smooth, 0, 8);
+
+  const outer = [];
+  for (let j = 0; j < segments; j++) {
+    const theta = (j / segments) * Math.PI * 2;
+    const p = [...mouth];
+    p[lat] += Math.cos(theta) * halfW;
+    p[1] += Math.sin(theta) * radiusY;
+    p[fa] -= sign * frontInset;
+    outer.push(p);
+  }
+  smoothClosedLoop(outer, smoothIters);
+
+  const sources = outer.map((p) => nearestMouthSource(sourcePositions, p, anchor, cfg, region, p[1] < mouth[1]));
+  const pos = Array.from(aug.positions);
+  const idx = Array.from(aug.indices);
+  const lower = Array.from(aug.lowerMask);
+  const sourceForAdded = Array.from(aug.sourceForAdded);
+  const morphSources = [];
+  const jawScales = [];
+  const puckerScales = [];
+  const rings = [];
+
+  aug.generatedStart = aug.vertexCount;
+  const makeVertex = (p, source, jawScale, puckerScale) => {
+    const v = pos.length / 3;
+    pos.push(p[0], p[1], p[2]);
+    lower.push(jawScale > 0.28 ? 1 : 0);
+    sourceForAdded.push(source);
+    morphSources.push(jawScale > 0.1 && aug.lowerDupBySource?.has(source)
+      ? aug.lowerDupBySource.get(source)
+      : source);
+    jawScales.push(jawScale);
+    puckerScales.push(puckerScale);
+    return v;
+  };
+
+  for (let r = 0; r < ringCount; r++) {
+    const t = ringCount === 1 ? 0 : r / (ringCount - 1);
+    const eased = smoothstep01(t);
+    const bevelT = bevelSegments ? Math.min(1, r / (bevelSegments + 1)) : (r > 0 ? 1 : 0);
+    const radialInset = bevelInset * smoothstep01(bevelT) + 0.04 * halfW * eased;
+    const latScale = Math.max(0.15, (halfW - radialInset) / halfW);
+    const yScale = Math.max(0.20, (radiusY - radialInset * 0.65) / radiusY);
+    const depth = frontInset + totalDepth * eased;
+    const ring = [];
+    for (let j = 0; j < segments; j++) {
+      const theta = (j / segments) * Math.PI * 2;
+      const sin = Math.sin(theta);
+      const radial = outer[j];
+      const p = [...mouth];
+      p[lat] = mouth[lat] + (radial[lat] - mouth[lat]) * latScale;
+      p[1] = mouth[1] + (radial[1] - mouth[1]) * yScale;
+      p[fa] = mouth[fa] - sign * depth;
+
+      const lowerAmount = clamp01((0.18 - sin) / 1.18);
+      const jawScale = lowerAmount * (1 - 0.72 * eased);
+      const puckerScale = 1 - 0.55 * eased;
+      ring.push(makeVertex(p, sources[j], jawScale, puckerScale));
+    }
+    rings.push(ring);
+  }
+
+  const extraIndexStart = idx.length;
+  const getP = (v) => [pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]];
+  const pushInwardTri = (a, b, c) => {
+    const pa = getP(a), pb = getP(b), pc = getP(c);
+    const n = cross(sub(pb, pa), sub(pc, pa));
+    const mid = [(pa[0] + pb[0] + pc[0]) / 3, (pa[1] + pb[1] + pc[1]) / 3, (pa[2] + pb[2] + pc[2]) / 3];
+    const radialOut = [0, 0, 0];
+    radialOut[lat] = mid[lat] - mouth[lat];
+    radialOut[1] = mid[1] - mouth[1];
+    if (dot(n, radialOut) > 0) idx.push(a, c, b);
+    else idx.push(a, b, c);
+  };
+
+  for (let r = 0; r < rings.length - 1; r++) {
+    for (let j = 0; j < segments; j++) {
+      const jn = (j + 1) % segments;
+      const a = rings[r][j], b = rings[r][jn], c = rings[r + 1][j], d = rings[r + 1][jn];
+      pushInwardTri(a, b, c);
+      pushInwardTri(b, d, c);
+    }
+  }
+
+  const generatedCount = pos.length / 3 - aug.generatedStart;
+  const generatedNormals = new Float32Array(generatedCount * 3);
+  for (let i = extraIndexStart; i < idx.length; i += 3) {
+    const a = idx[i], b = idx[i + 1], c = idx[i + 2];
+    const n = normalize(cross(sub(getP(b), getP(a)), sub(getP(c), getP(a))));
+    for (const v of [a, b, c]) {
+      if (v < aug.generatedStart) continue;
+      const o = (v - aug.generatedStart) * 3;
+      generatedNormals[o] += n[0];
+      generatedNormals[o + 1] += n[1];
+      generatedNormals[o + 2] += n[2];
+    }
+  }
+  for (let i = 0; i < generatedNormals.length; i += 3) {
+    const n = normalize([generatedNormals[i], generatedNormals[i + 1], generatedNormals[i + 2]]);
+    generatedNormals[i] = n[0]; generatedNormals[i + 1] = n[1]; generatedNormals[i + 2] = n[2];
+  }
+
+  aug.positions = Float32Array.from(pos);
+  aug.indices = Uint32Array.from(idx);
+  aug.lowerMask = Uint8Array.from(lower);
+  aug.sourceForAdded = Uint32Array.from(sourceForAdded);
+  aug.vertexCount = aug.positions.length / 3;
+  aug.rimAdded = generatedCount;
+  aug.generatedCount = generatedCount;
+  aug.generatedMorphSources = Uint32Array.from(morphSources);
+  aug.generatedJawScales = Float32Array.from(jawScales);
+  aug.generatedPuckerScales = Float32Array.from(puckerScales);
+  aug.generatedNormals = generatedNormals;
+  aug.extraIndexStart = extraIndexStart;
+}
+
+function nearestMouthSource(positions, target, anchor, cfg, region, preferLower) {
+  const { mouth, size, fa, sign } = anchor;
+  const lat = lateralAxis(fa);
+  const n = positions.length / 3;
+  const halfW = 0.75 * cfg.lip_cut_width_frac * size[lat];
+  const yWin = Math.max(0.18 * size[1], 2.2 * num(cfg.mouth_open_height_frac, 0.1) * size[1]);
+  const halfFront = 0.5 * size[fa];
+  let best = -1, bestScore = Infinity, fallback = -1, fallbackScore = Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]];
+    if (region && (p[0] < region.lo[0] || p[0] > region.hi[0] ||
+                   p[1] < region.lo[1] || p[1] > region.hi[1] ||
+                   p[2] < region.lo[2] || p[2] > region.hi[2])) continue;
+    const d2 = dist2(p, target);
+    if (d2 < fallbackScore) { fallbackScore = d2; fallback = i; }
+    const frontGate = sign * (p[fa] - mouth[fa] + sign * halfFront) / halfFront;
+    if (frontGate < 0.45) continue;
+    if (Math.abs(p[lat] - mouth[lat]) > halfW) continue;
+    if (Math.abs(p[1] - mouth[1]) > yWin) continue;
+    const wrongSide = preferLower ? p[1] > mouth[1] : p[1] < mouth[1];
+    const sidePenalty = wrongSide ? size[1] * size[1] * 0.22 : 0;
+    const score = d2 + sidePenalty;
+    if (score < bestScore) { bestScore = score; best = i; }
+  }
+  return best >= 0 ? best : Math.max(0, fallback);
+}
+
+function smoothClosedLoop(points, iterations) {
+  const n = points.length;
+  for (let it = 0; it < iterations; it++) {
+    const next = points.map((p, i) => {
+      const a = points[(i + n - 1) % n], b = points[(i + 1) % n];
+      return [
+        p[0] * 0.5 + (a[0] + b[0]) * 0.25,
+        p[1] * 0.5 + (a[1] + b[1]) * 0.25,
+        p[2] * 0.5 + (a[2] + b[2]) * 0.25,
+      ];
+    });
+    for (let i = 0; i < n; i++) points[i] = next[i];
+  }
+}
+
+function num(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+function clampInt(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, Math.round(num(v, lo))));
+}
+function smoothstep01(t) {
+  t = clamp01(t);
+  return t * t * (3 - 2 * t);
+}
+function cloneTyped(src) {
+  return src.slice ? src.slice() : new src.constructor(src);
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function dist2(a, b) {
+  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+  return dx * dx + dy * dy + dz * dz;
 }
 
 // -----------------------------------------------------------------------------

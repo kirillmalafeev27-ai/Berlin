@@ -280,6 +280,68 @@ export class GLBPatcher {
     prim.indices = this.addAccessorIndices(newIndices, vertCount);
   }
 
+  // Replace a primitive after a procedural mouth augmentation. POSITION and
+  // indices come from the augmentation; all other per-vertex data is inherited
+  // from nearest source head vertices so skinning and existing morphs survive.
+  replaceAugmentedGeometry(meshIndex, primIndex, aug) {
+    const prim = this.json.meshes[meshIndex].primitives[primIndex];
+    const extendAttr = (accIdx, semantic = '') => {
+      const acc = this.json.accessors[accIdx];
+      const data = readAccessor(this.json, this.chunks[0], accIdx);
+      const itemSize = TYPE_SIZE[acc.type];
+      let out;
+      if (semantic === 'POSITION') {
+        out = aug.positions;
+      } else {
+        out = new data.constructor(aug.vertexCount * itemSize);
+        out.set(data);
+        for (let k = 0; k < aug.sourceForAdded.length; k++) {
+          const dst = aug.baseCount + k;
+          const src = aug.sourceForAdded[k];
+          for (let c = 0; c < itemSize; c++) {
+            out[dst * itemSize + c] = data[src * itemSize + c];
+          }
+        }
+        if (semantic === 'NORMAL' && itemSize === 3 && aug.generatedNormals) {
+          out.set(aug.generatedNormals, aug.generatedStart * 3);
+        }
+      }
+
+      const bufferView = this.addBufferView(out, semantic === 'INDICES' ? TARGET_ELEMENT_ARRAY : TARGET_ARRAY_BUFFER);
+      const newAcc = {
+        bufferView, componentType: acc.componentType,
+        count: aug.vertexCount, type: acc.type,
+      };
+      if (acc.normalized) newAcc.normalized = true;
+      if (acc.min && acc.max) {
+        const min = new Array(itemSize).fill(Infinity);
+        const max = new Array(itemSize).fill(-Infinity);
+        for (let i = 0; i < newAcc.count; i++) {
+          for (let c = 0; c < itemSize; c++) {
+            const v = out[i * itemSize + c];
+            if (v < min[c]) min[c] = v;
+            if (v > max[c]) max[c] = v;
+          }
+        }
+        newAcc.min = min; newAcc.max = max;
+      }
+      this.json.accessors.push(newAcc);
+      return this.json.accessors.length - 1;
+    };
+
+    for (const key of Object.keys(prim.attributes)) {
+      prim.attributes[key] = extendAttr(prim.attributes[key], key);
+    }
+    for (const target of prim.targets || []) {
+      for (const key of Object.keys(target)) target[key] = extendAttr(target[key], `MORPH_${key}`);
+    }
+    prim.indices = this.addAccessorIndices(aug.indices, aug.vertexCount);
+
+    if (aug.rimAdded && prim.material != null && this.json.materials[prim.material]) {
+      this.json.materials[prim.material].doubleSided = true;
+    }
+  }
+
   addMaterial(name, rgba, { metallic = 0, roughness = 1, doubleSided = false } = {}) {
     this.json.materials.push({
       name,
