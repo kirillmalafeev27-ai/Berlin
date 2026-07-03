@@ -1,5 +1,54 @@
 # facerig — jaw-open lip-sync rigs for AI-generated GLBs
 
+## v0.3 — web service (calibration tool + game preview + TTS proxy)
+
+Everything from the v0.2 roadmap is now implemented:
+
+| Roadmap item | Status |
+| --- | --- |
+| 1. Real mouth opening (lip cut) | ✅ `lip_cut` config — the mouth line is split (welded meshes: vertex duplication; flat-shaded meshes: lower-lip masking) so `jawOpen` reveals the cavity + tongue instead of stretching skin |
+| 2. Verify on a mixamo rig | ✅ `ali_mixamo.glb` (converted from the Mixamo FBX with FBX2glTF) goes through the whole flow in e2e tests; the morph lands on the skinned primitives and the cavity/tongue are parented under `mixamorig:Head` via its inverse-bind matrix |
+| 3. Batch mode | ✅ `tools/batch-rig.mjs` — the browser Export and the CLI share one pure pipeline (`web/js/rig-pipeline.js`); outputs are byte-identical (asserted in e2e) |
+| 4. Visemes via timestamps | ✅ both TTS paths use the ElevenLabs *with-timestamps* endpoint; the runtime closes the mouth on м/б/п and drives the new `mouthPucker` morph on o/u/ö/ü |
+| 5. Auto front axis, rotation gizmos | ✅ face direction auto-detected (nose protrusion + vertex density, falls back to manual); cavity/tongue rotation sliders |
+
+### Run locally
+
+```bash
+ELEVENLABS_API_KEY=sk_... node server.mjs     # key optional — TTS disabled without it
+# calibration tool:  http://localhost:8080/
+# game preview:      http://localhost:8080/preview.html
+```
+
+(The static tool also works with any file server, e.g. `python3 -m http.server` —
+only `/api/tts` needs the node server.)
+
+### Deploy on Render
+
+`render.yaml` is a ready blueprint: **New → Blueprint** on
+[dashboard.render.com](https://dashboard.render.com), point it at this repo,
+then set `ELEVENLABS_API_KEY` (and optionally `ELEVENLABS_VOICE_ID`) in the
+service's Environment tab. The key never reaches the browser — the client
+calls `POST /api/tts` on your service.
+
+### Game preview (`/preview.html`)
+
+The "real conditions" page: a rigged character on a stage with lighting and a
+procedural idle, plus a text bar. Type a line → **Speak** → ElevenLabs TTS
+with timestamps → the character talks with viseme-refined lip-sync using
+`web/js/lipsync-runtime.js`, the exact module the game will import. The last
+GLB you exported from the calibration tool opens here automatically (handed
+over via IndexedDB); you can also drop any rigged GLB or pass `?model=<url>`.
+
+### Batch mode
+
+```bash
+node tools/batch-rig.mjs ali.config.json char1.glb char2.glb ...
+# → char1.rigged.glb, char2.rigged.glb (same code path as the browser export)
+```
+
+---
+
 ## v0.2 — browser calibration tool (`web/`)
 
 The Python prototype below is now ported to the browser as a visual, per-model
@@ -47,22 +96,17 @@ Notes:
 - Draco/meshopt-compressed GLBs are rejected with a clear message — decompress
   first (`gltf-transform draco --decompress in.glb out.glb`).
 
-### Roadmap (what would improve the tool most, in order)
+### Roadmap — done in v0.3 (see the table at the top)
 
-1. **A real mouth opening.** v1 stretches the sealed shell (chin drop) — the
-   dark cavity is only visible if the surface actually separates. The next big
-   brick is a spatial *lip cut*: split vertices along the mouth line inside the
-   mouth width, so `jawOpen` reveals the cavity. This is the difference between
-   "talking chin" and a mouth.
-2. **Verify on a mixamo-rigged export.** `Али.glb` has no skeleton yet; the
-   skinned path (morph on skinned primitives + cavity under `mixamorig:Head`)
-   is implemented but should be e2e-checked on a rigged character.
-3. **Batch mode** (milestone 6): `facerig-core.js` is three.js-free on purpose —
-   a small node script can apply saved config JSONs to all 16 characters.
-4. **Visemes via ElevenLabs timestamps** — the with-timestamps endpoint gives
-   character timing; even 3 mouth shapes (open/closed/OO) would upgrade the read.
-5. Auto-detect front axis/sign; Draco decompression in-tool; rotation gizmo for
-   cavity/tongue.
+All five items shipped: lip cut, mixamo verification, batch mode,
+timestamp visemes (`mouthPucker`), auto orientation + rotation controls.
+Still open for later: Draco decompression in-tool (compressed GLBs are
+rejected with a clear message), real ARKit-style viseme sets, emotion morphs.
+
+Known divergence from the Python prototype: the tongue's forward offset is
++0.06 of head depth (Python used +0.15, which pokes through closed lips on
+real heads with mustaches); `_jaw_delta` itself is still port-identical when
+`lip_cut` is off.
 
 ---
 
@@ -102,7 +146,7 @@ process("head.glb", "head.rigged.glb", cfg={
 
 ## Runtime (Three.js)
 
-`lipsync-runtime.js` drives the morph straight from ElevenLabs audio amplitude —
+`web/js/lipsync-runtime.js` (moved there in v0.3) drives the morph straight from ElevenLabs audio amplitude —
 no timestamps, no phoneme mapping, works for German out of the box:
 
 ```js

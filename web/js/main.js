@@ -1,21 +1,24 @@
 // main.js — facerig-web: visual calibration tool for jaw-open lip-sync rigs.
 // Load a (full-body) GLB → isolate the head with a box → tune the config with
-// live preview → export a rigged GLB (jawOpen morph + cavity + tongue) and a
-// config JSON compatible with facerig.py.
+// live preview → export a rigged GLB (jawOpen + mouthPucker morphs, lip cut,
+// cavity, tongue) and a config JSON. Export goes through rig-pipeline.js — the
+// same pure code path the node batch tool uses.
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
 
 import {
-  DEFAULT_CFG, mergeCfg, mouthAnchor, jawDelta,
+  mergeCfg, mouthAnchor, jawDelta, puckerDelta, cutLips, dupAttribute,
   cavityAndTonguePlacement, boundsInBox, guessHeadBox, snapFrontOffsetFrac,
+  guessFrontOrientation,
 } from './facerig-core.js';
-import { GLBPatcher, findHeadJointNode } from './glb-io.js';
+import { rigGLB } from './rig-pipeline.js';
+import { parseGLB } from './glb-io.js';
 import { AmplitudeDriver } from './audio-drive.js';
+import { idbSet } from './idb-store.js';
 
 // ---------------------------------------------------------------------------
 // scene
@@ -59,22 +62,30 @@ const state = {
   fileName: null,
   originalBuffer: null,     // ArrayBuffer of the loaded GLB (export patches this)
   gltf: null,
-  root: null,               // loaded scene root
-  meshes: [],               // candidate THREE.Mesh list
-  mesh: null,               // selected head-owning mesh
+  gltfJson: null,           // parsed GLB json (names, meshes) for config export
+  root: null,
+  meshes: [],
+  mesh: null,               // selected head-owning THREE mesh
+  meshIndex: null,          // its glTF mesh index
+  originalGeo: null,        // untouched geometry of the selected mesh
   cfg: mergeCfg(),
   region: { lo: [0, 0, 0], hi: [0, 0, 0] },
-  anchor: null,             // {mouth,size,fa,sign} — derived, in mesh local space
+  anchor: null,
   headBounds: null,
-  delta: null,              // Float32Array for selected mesh
-  stats: { driven: 0, regionVerts: 0, maxOffset: 0 },
+  cut: null,                // active cutLips result (or null)
+  cutSig: null,
+  stats: { driven: 0, regionVerts: 0, maxOffset: 0, cutAdded: 0 },
   jawOpen: 0,
-  audioDrives: false,       // when audio plays, it overrides the slider
+  pucker: 0,
+  audioDrives: false,
 };
 
-// preview helper objects (all children of the selected mesh → mesh-local space)
+// preview helper objects — children of `helpers.space`, a group positioned so
+// its local coordinates == the mesh's bind-space coordinates on the RENDERED
+// surface (plain mesh: the mesh itself; skinned mesh: head bone × IBM).
 const helpers = {
-  regionProxy: new THREE.Object3D(),      // position=box center, scale=box size
+  space: null,
+  regionProxy: new THREE.Object3D(),
   regionBox: null,
   anchorMarker: null,
   cavity: null,
@@ -93,6 +104,7 @@ async function loadArrayBuffer(buf, name = 'model.glb') {
   clearModel();
   state.fileName = name;
   state.originalBuffer = buf;
+  state.gltfJson = parseGLB(buf).json;
   state.gltf = gltf;
   state.root = gltf.scene;
   scene.add(gltf.scene);
@@ -103,7 +115,6 @@ async function loadArrayBuffer(buf, name = 'model.glb') {
   });
   if (!state.meshes.length) { setStatus('No meshes found in GLB'); return; }
 
-  // default: the mesh with the most vertices (the body / merged model)
   const biggest = state.meshes.reduce((a, b) =>
     (b.geometry.attributes.position.count > a.geometry.attributes.position.count ? b : a));
   rebuildMeshDropdown();
@@ -113,50 +124,63 @@ async function loadArrayBuffer(buf, name = 'model.glb') {
 }
 
 function clearModel() {
+  restoreSelectedMesh();
   if (state.root) scene.remove(state.root);
   gizmo.detach();
+  destroyHelpers();
+  Object.assign(state, {
+    gltf: null, gltfJson: null, root: null, meshes: [], mesh: null,
+    meshIndex: null, originalGeo: null, anchor: null, headBounds: null,
+    cut: null, cutSig: null,
+  });
+}
+
+function restoreSelectedMesh() {
+  if (state.mesh && state.originalGeo) {
+    if (state.mesh.geometry !== state.originalGeo) state.mesh.geometry.dispose();
+    state.mesh.geometry = state.originalGeo;
+    state.mesh.updateMorphTargets();
+  }
+}
+
+function destroyHelpers() {
   for (const k of ['regionBox', 'anchorMarker', 'cavity', 'tongue']) {
     if (helpers[k]) { helpers[k].removeFromParent(); helpers[k] = null; }
   }
   helpers.regionProxy.removeFromParent();
-  Object.assign(state, {
-    gltf: null, root: null, meshes: [], mesh: null,
-    anchor: null, headBounds: null, delta: null,
-  });
+  if (helpers.space) { helpers.space.removeFromParent(); helpers.space = null; }
 }
 
 function selectMesh(mesh) {
   if (state.mesh === mesh) return;
-  // clean helpers off the previous mesh
-  for (const k of ['regionBox', 'anchorMarker', 'cavity', 'tongue']) {
-    if (helpers[k]) { helpers[k].removeFromParent(); helpers[k] = null; }
-  }
-  helpers.regionProxy.removeFromParent();
-  if (state.mesh) removePreviewMorph(state.mesh);
+  destroyHelpers();
+  restoreSelectedMesh();
 
   state.mesh = mesh;
+  state.originalGeo = mesh.geometry;
+  state.cut = null;
+  state.cutSig = null;
   guiState.mesh = meshLabel(mesh);
 
-  const pos = mesh.geometry.attributes.position.array;
+  const assoc = state.gltf.parser.associations.get(mesh);
+  state.meshIndex = assoc && assoc.meshes != null ? assoc.meshes : null;
+
+  const pos = pristinePositions();
   const guess = guessHeadBox(pos);
   state.region.lo = guess.lo; state.region.hi = guess.hi;
 
-  buildHelpers(mesh);
-  ensurePreviewMorph(mesh);
-  recompute();
-  snapAnchorToLips(); // pull the anchor off the nose-tip plane onto the lips
-}
+  // auto-detect the face direction (overridable in Orientation)
+  const orient = guessFrontOrientation(pos, state.region);
+  if (orient) {
+    state.cfg.front_axis = orient.front_axis;
+    state.cfg.front_sign = orient.front_sign;
+    refreshGui();
+  }
 
-// The bbox-front anchor sits at nose-tip depth; snap it back to the actual
-// lip surface by writing the front-axis component of mouth_offset_frac.
-function snapAnchorToLips() {
-  if (!state.mesh || !state.headBounds) return;
-  const pos = state.mesh.geometry.attributes.position.array;
-  const cfgNoOffset = { ...state.cfg, mouth_offset_frac: [0, 0, 0] };
-  const base = mouthAnchor(state.headBounds, cfgNoOffset);
-  const off = snapFrontOffsetFrac(pos, base, state.region);
-  state.cfg.mouth_offset_frac[base.fa] = off;
+  buildHelpers(mesh);
+  rebuildWorkingGeometry();   // installs facerig morph slots
   recompute();
+  snapAnchorToLips();         // pull the anchor off the nose-tip plane onto the lips
 }
 
 function meshLabel(m) {
@@ -164,58 +188,104 @@ function meshLabel(m) {
   return `${m.name || '(unnamed)'} · ${c}v`;
 }
 
-// ---------------------------------------------------------------------------
-// preview morph target (live jawOpen on the three.js mesh)
-// ---------------------------------------------------------------------------
-function ensurePreviewMorph(mesh) {
-  const geo = mesh.geometry;
+function pristinePositions() { return state.originalGeo.attributes.position.array; }
+function pristineIndices() {
+  const geo = state.originalGeo;
+  if (geo.index) return geo.index.array;
   const n = geo.attributes.position.count;
-  geo.morphTargetsRelative = true;
-  const attr = new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3);
-  geo.morphAttributes.position = [...(geo.morphAttributes.position || []), attr];
-  mesh.updateMorphTargets();
-  mesh.morphTargetDictionary = mesh.morphTargetDictionary || {};
-  mesh.morphTargetDictionary.jawOpen = geo.morphAttributes.position.length - 1;
-  mesh.material.needsUpdate = true;
-  mesh._facerigMorphIndex = mesh.morphTargetDictionary.jawOpen;
-}
-
-function removePreviewMorph(mesh) {
-  const geo = mesh.geometry;
-  const i = mesh._facerigMorphIndex;
-  if (i == null) return;
-  geo.morphAttributes.position.splice(i, 1);
-  if (!geo.morphAttributes.position.length) delete geo.morphAttributes.position;
-  mesh.updateMorphTargets();
-  mesh.material.needsUpdate = true;
-  delete mesh._facerigMorphIndex;
+  const seq = new Uint32Array(n);
+  for (let i = 0; i < n; i++) seq[i] = i;
+  return seq;
 }
 
 // ---------------------------------------------------------------------------
-// helper visuals (region box, anchor marker, cavity + tongue preview)
+// working geometry: pristine attributes (+ cut duplicates) + facerig morphs
+// ---------------------------------------------------------------------------
+function rebuildWorkingGeometry() {
+  const mesh = state.mesh;
+  const src = state.originalGeo;
+  const cut = state.cut;
+  const g = new THREE.BufferGeometry();
+
+  for (const [name, attr] of Object.entries(src.attributes)) {
+    const data = cut ? dupAttribute(attr.array, attr.itemSize, cut.dupSources) : attr.array.slice();
+    g.setAttribute(name, new THREE.BufferAttribute(data, attr.itemSize, attr.normalized));
+  }
+  g.setIndex(new THREE.BufferAttribute(
+    cut ? cut.indices.slice() : Uint32Array.from(pristineIndices()), 1));
+  for (const grp of src.groups) g.addGroup(grp.start, grp.count, grp.materialIndex);
+  g.morphTargetsRelative = true;
+
+  // carry over any pre-existing morphs, then append ours
+  const names = [];
+  const dict = mesh.morphTargetDictionary || {};
+  const revDict = Object.fromEntries(Object.entries(dict).map(([k, v]) => [v, k]));
+  const srcMorphs = (src.morphAttributes.position || []);
+  const morphs = srcMorphs.map((a, i) => {
+    const data = cut ? dupAttribute(a.array, a.itemSize, cut.dupSources) : a.array.slice();
+    const na = new THREE.BufferAttribute(data, a.itemSize, a.normalized);
+    na.name = a.name || revDict[i] || `morph_${i}`;
+    names.push(na.name);
+    return na;
+  });
+  const n = g.attributes.position.count;
+  for (const nm of ['jawOpen', 'mouthPucker']) {
+    const a = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
+    a.name = nm;
+    morphs.push(a);
+    names.push(nm);
+  }
+  g.morphAttributes.position = morphs;
+  g.computeBoundingSphere();
+
+  if (mesh.geometry !== state.originalGeo) mesh.geometry.dispose();
+  mesh.geometry = g;
+  mesh.updateMorphTargets();
+  mesh.morphTargetDictionary = Object.fromEntries(names.map((nm, i) => [nm, i]));
+  mesh.morphTargetInfluences = names.map(() => 0);
+  mesh._facerigJaw = mesh.morphTargetDictionary.jawOpen;
+  mesh._facerigPucker = mesh.morphTargetDictionary.mouthPucker;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  mats.forEach((mt) => { mt.needsUpdate = true; });
+}
+
+// ---------------------------------------------------------------------------
+// helper visuals
 // ---------------------------------------------------------------------------
 function buildHelpers(mesh) {
-  // region box: unit wireframe cube scaled/positioned via regionProxy
+  // find the space where mesh-local coordinates land on the rendered surface
+  helpers.space = new THREE.Group();
+  helpers.space.matrixAutoUpdate = false;
+  let parent = mesh;
+  if (mesh.isSkinnedMesh && mesh.skeleton) {
+    const bi = mesh.skeleton.bones.findIndex((b) => /head/i.test(b.name));
+    if (bi >= 0) {
+      parent = mesh.skeleton.bones[bi];
+      helpers.space.matrix.copy(mesh.skeleton.boneInverses[bi]);
+    }
+  }
+  parent.add(helpers.space);
+
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
   helpers.regionBox = new THREE.LineSegments(
     new THREE.EdgesGeometry(boxGeo),
     new THREE.LineBasicMaterial({ color: 0x4da3ff }));
   helpers.regionProxy.add(helpers.regionBox);
-  mesh.add(helpers.regionProxy);
+  helpers.space.add(helpers.regionProxy);
   syncProxyFromRegion();
 
   helpers.anchorMarker = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 12),
     new THREE.MeshBasicMaterial({ color: 0xffcc33, depthTest: false, transparent: true, opacity: 0.9 }));
   helpers.anchorMarker.renderOrder = 999;
-  mesh.add(helpers.anchorMarker);
+  helpers.space.add(helpers.anchorMarker);
 
-  const sphere = mergeVertices(new THREE.IcosahedronGeometry(1, 2));
+  const sphere = new THREE.IcosahedronGeometry(1, 2);
   helpers.cavity = new THREE.Mesh(sphere, new THREE.MeshStandardMaterial({
     side: THREE.BackSide, metalness: 0, roughness: 1 }));
   helpers.tongue = new THREE.Mesh(sphere.clone(), new THREE.MeshStandardMaterial({
     metalness: 0, roughness: 0.8 }));
-  mesh.add(helpers.cavity, helpers.tongue);
+  helpers.space.add(helpers.cavity, helpers.tongue);
 }
 
 function syncProxyFromRegion() {
@@ -232,181 +302,148 @@ function syncRegionFromProxy() {
 }
 
 // ---------------------------------------------------------------------------
-// the core recompute: region → head bounds → anchor → jaw delta → previews
+// recompute: region → bounds → anchor → (cut) → deltas → previews
 // ---------------------------------------------------------------------------
 function recompute() {
   const mesh = state.mesh;
   if (!mesh) return;
-  const pos = mesh.geometry.attributes.position.array;
+  const pos0 = pristinePositions();
 
-  const hb = boundsInBox(pos, state.region);
+  const hb = boundsInBox(pos0, state.region);
   if (!hb) { setStatus('⚠ Head box contains no vertices — move/scale it onto the head.'); return; }
   state.headBounds = hb;
   state.stats.regionVerts = hb.count;
-
   state.anchor = mouthAnchor(hb, state.cfg);
-  const { delta, driven, maxOffset } = jawDelta(pos, state.anchor, state.cfg, state.region);
-  state.delta = delta;
-  state.stats.driven = driven;
-  state.stats.maxOffset = maxOffset;
 
-  // write into the live morph attribute
-  const attr = mesh.geometry.morphAttributes.position[mesh._facerigMorphIndex];
-  attr.array.set(delta);
-  attr.needsUpdate = true;
+  // lip cut (recomputed only when the inputs that shape it change)
+  const cfg = state.cfg;
+  const sig = cfg.lip_cut
+    ? JSON.stringify([state.anchor.mouth, cfg.lip_cut_width_frac,
+                      state.region.lo, state.region.hi, cfg.front_axis, cfg.front_sign])
+    : 'off';
+  if (sig !== state.cutSig) {
+    state.cutSig = sig;
+    state.cut = cfg.lip_cut ? cutLips(pos0, pristineIndices(), state.anchor, cfg, state.region) : null;
+    state.stats.cutAdded = state.cut ? state.cut.addedCount : 0;
+    rebuildWorkingGeometry();
+  }
 
-  // anchor marker + cavity + tongue previews
+  const positions = state.cut ? dupAttribute(pos0, 3, state.cut.dupSources) : pos0;
+  const jaw = jawDelta(positions, state.anchor, cfg, state.region,
+    { lowerMask: state.cut?.lowerMask, hardBelow: cfg.lip_cut });
+  state.stats.driven = jaw.driven;
+  state.stats.maxOffset = jaw.maxOffset;
+
+  const jawAttr = mesh.geometry.morphAttributes.position[mesh._facerigJaw];
+  jawAttr.array.set(jaw.delta);
+  jawAttr.needsUpdate = true;
+  const puckAttr = mesh.geometry.morphAttributes.position[mesh._facerigPucker];
+  puckAttr.array.set(puckerDelta(positions, state.anchor, cfg, state.region));
+  puckAttr.needsUpdate = true;
+
+  // helper transforms
   const a = state.anchor;
-  const markerR = 0.02 * a.size[1];
-  helpers.anchorMarker.scale.setScalar(markerR);
+  helpers.anchorMarker.scale.setScalar(0.02 * a.size[1]);
   helpers.anchorMarker.position.fromArray(a.mouth);
-
-  const place = cavityAndTonguePlacement(a, state.cfg);
+  const place = cavityAndTonguePlacement(a, cfg);
   helpers.cavity.position.fromArray(place.cavCenter);
   helpers.cavity.scale.fromArray(place.cavRadii);
-  helpers.cavity.material.color.setRGB(...state.cfg.cavity_color.slice(0, 3));
+  helpers.cavity.rotation.set(...cfg.cavity_rotation_deg.map((d) => d * Math.PI / 180));
+  helpers.cavity.material.color.setRGB(...cfg.cavity_color.slice(0, 3));
   helpers.tongue.position.fromArray(place.tonCenter);
   helpers.tongue.scale.fromArray(place.tonRadii);
-  helpers.tongue.material.color.setRGB(...state.cfg.tongue_color.slice(0, 3));
+  helpers.tongue.rotation.set(...cfg.tongue_rotation_deg.map((d) => d * Math.PI / 180));
+  helpers.tongue.material.color.setRGB(...cfg.tongue_color.slice(0, 3));
 
   updateStatsOverlay();
+}
+
+// The bbox-front anchor sits at nose-tip depth; snap it back to the actual
+// lip surface by writing the front-axis component of mouth_offset_frac.
+function snapAnchorToLips() {
+  if (!state.mesh || !state.headBounds) return;
+  const cfgNoOffset = { ...state.cfg, mouth_offset_frac: [0, 0, 0] };
+  const base = mouthAnchor(state.headBounds, cfgNoOffset);
+  const off = snapFrontOffsetFrac(pristinePositions(), base, state.region);
+  state.cfg.mouth_offset_frac[base.fa] = off;
+  recompute();
 }
 
 function updateStatsOverlay() {
   const el = document.getElementById('stats');
   const s = state.stats, hb = state.headBounds;
   if (!hb) { el.textContent = ''; return; }
-  const h = (hb.hi[1] - hb.lo[1]).toFixed(3);
+  const h = hb.hi[1] - hb.lo[1];
   el.innerHTML =
-    `head verts in box: <b>${s.regionVerts}</b> · driven by jaw: <b>${s.driven}</b><br>` +
-    `head height: ${h} · max open offset: ${s.maxOffset.toFixed(4)} ` +
-    `(${(s.maxOffset / (hb.hi[1] - hb.lo[1]) * 100).toFixed(1)}% of head)`;
+    `head verts in box: <b>${s.regionVerts}</b> · driven by jaw: <b>${s.driven}</b>` +
+    (state.cfg.lip_cut ? ` · lip-cut verts: <b>${s.cutAdded}</b>` : '') + '<br>' +
+    `head height: ${h.toFixed(3)} · max open offset: ${s.maxOffset.toFixed(4)} ` +
+    `(${(s.maxOffset / h * 100).toFixed(1)}% of head)`;
   if (s.driven === 0) el.innerHTML += '<br>⚠ no vertices driven — check front axis/sign and mouth height';
+  if (state.cfg.lip_cut && !s.cutAdded) el.innerHTML += '<br>⚠ lip cut produced no split — widen the cut or move the anchor to the lip line';
 }
 
 // ---------------------------------------------------------------------------
-// export
+// export / import
 // ---------------------------------------------------------------------------
 function buildRiggedGLB() {
-  if (!state.mesh || !state.delta) throw new Error('nothing to export');
-  const assoc = state.gltf.parser.associations.get(state.mesh);
-  if (!assoc || assoc.meshes == null) throw new Error('cannot map selected mesh back to glTF (unsupported asset)');
-  const meshIndex = assoc.meshes;
-
-  const patcher = new GLBPatcher(state.originalBuffer);
-  const gMesh = patcher.json.meshes[meshIndex];
-
-  // one delta per primitive of the glTF mesh (three splits primitives into
-  // sibling Mesh objects; compute each from its own positions, same anchor)
-  const primDeltas = gMesh.primitives.map((prim, primIndex) => {
-    let threeMesh = null;
-    state.gltf.parser.associations.forEach((v, obj) => {
-      if (obj.isMesh && v.meshes === meshIndex && (v.primitives ?? 0) === primIndex) threeMesh = obj;
-    });
-    if (threeMesh === state.mesh) return state.delta;
-    if (!threeMesh) {
-      const count = patcher.json.accessors[prim.attributes.POSITION].count;
-      return new Float32Array(count * 3);
-    }
-    const pos = threeMesh.geometry.attributes.position.array;
-    return jawDelta(pos, state.anchor, state.cfg, state.region).delta;
-  });
-  patcher.addJawOpenMorph(meshIndex, primDeltas);
-
-  // cavity + tongue geometry, baked into mesh-local space
-  const place = cavityAndTonguePlacement(state.anchor, state.cfg);
-  const cavGeo = bakeEllipsoid(place.cavCenter, place.cavRadii, true);
-  const tonGeo = bakeEllipsoid(place.tonCenter, place.tonRadii, false);
-
-  const cavMat = patcher.addMaterial('cavity', state.cfg.cavity_color, { roughness: 1 });
-  const tonMat = patcher.addMaterial('tongue', state.cfg.tongue_color, { roughness: 0.8 });
-
-  // parent under the head joint when the model is skinned (so the mouth props
-  // follow mixamo head motion); otherwise under the scene root.
-  const headJoint = findHeadJointNode(patcher.json, meshIndex);
-  state.mesh.updateWorldMatrix(true, false);
-  let matrix = state.mesh.matrixWorld.clone();
-  if (headJoint != null) {
-    let jointObj = null;
-    state.gltf.parser.associations.forEach((v, obj) => {
-      if (v.nodes === headJoint) jointObj = obj;
-    });
-    if (jointObj) {
-      jointObj.updateWorldMatrix(true, false);
-      matrix = new THREE.Matrix4().copy(jointObj.matrixWorld).invert().multiply(state.mesh.matrixWorld);
-    }
-  }
-  const m = matrix.elements;
-  patcher.addMeshNode('MouthCavity', cavGeo, cavMat, { parentNode: headJoint, matrix: m });
-  patcher.addMeshNode('Tongue', tonGeo, tonMat, { parentNode: headJoint, matrix: m });
-
-  return patcher.build();
-}
-
-// unit icosphere → ellipsoid at center with per-axis radii; flipped = normals
-// point inward (mouth cavity), implemented as reversed winding + negated normals.
-function bakeEllipsoid(center, radii, flipped) {
-  const geo = mergeVertices(new THREE.IcosahedronGeometry(1, 2));
-  const src = geo.attributes.position;
-  const n = src.count;
-  const positions = new Float32Array(n * 3);
-  const normals = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const x = src.getX(i), y = src.getY(i), z = src.getZ(i);
-    positions[i*3]   = center[0] + radii[0] * x;
-    positions[i*3+1] = center[1] + radii[1] * y;
-    positions[i*3+2] = center[2] + radii[2] * z;
-    // normal of a scaled sphere = position ∘ (1/r), renormalized
-    let nx = x / radii[0], ny = y / radii[1], nz = z / radii[2];
-    const len = Math.hypot(nx, ny, nz) || 1;
-    const s = (flipped ? -1 : 1) / len;
-    normals[i*3] = nx*s; normals[i*3+1] = ny*s; normals[i*3+2] = nz*s;
-  }
-  const srcIdx = geo.index.array;
-  const indices = new Array(srcIdx.length);
-  for (let i = 0; i < srcIdx.length; i += 3) {
-    if (flipped) { indices[i] = srcIdx[i]; indices[i+1] = srcIdx[i+2]; indices[i+2] = srcIdx[i+1]; }
-    else { indices[i] = srcIdx[i]; indices[i+1] = srcIdx[i+1]; indices[i+2] = srcIdx[i+2]; }
-  }
-  return { positions, normals, indices };
+  if (!state.mesh) throw new Error('nothing to export');
+  const { bytes, stats } = rigGLB(state.originalBuffer, exportConfigObject());
+  console.log('rigGLB stats', stats);
+  return bytes;
 }
 
 function exportConfigObject() {
   const hb = state.headBounds;
+  const gltfMesh = state.meshIndex != null ? state.gltfJson.meshes[state.meshIndex] : null;
   return {
     tool: 'facerig-web',
-    version: '0.2',
+    version: '0.3',
     input: state.fileName,
-    head_mesh: state.mesh ? (state.mesh.name || null) : null,
+    head_mesh: gltfMesh ? (gltfMesh.name ?? null) : (state.mesh?.name || null),
+    head_mesh_index: state.meshIndex,
     head_region: { lo: [...state.region.lo], hi: [...state.region.hi] },
     head_bounds: hb ? { min: [...hb.lo], max: [...hb.hi] } : null,
     mouth_anchor: state.anchor ? [...state.anchor.mouth] : null,
-    config: { ...state.cfg,
-      mouth_offset_frac: [...state.cfg.mouth_offset_frac],
-      cavity_offset_frac: [...state.cfg.cavity_offset_frac],
-      tongue_offset_frac: [...state.cfg.tongue_offset_frac],
-      cavity_scale: [...state.cfg.cavity_scale],
-      tongue_scale: [...state.cfg.tongue_scale],
-      cavity_color: [...state.cfg.cavity_color],
-      tongue_color: [...state.cfg.tongue_color] },
+    config: mergeCfg(state.cfg),
     stats: { ...state.stats },
   };
 }
 
 function applyConfigObject(obj) {
-  const cfg = obj.config || obj; // accept both a full report and a bare config
-  state.cfg = mergeCfg(cfg);
+  const cfg = obj.config || obj;
+  assignCfgInPlace(mergeCfg(cfg));
   if (obj.head_region) {
     state.region.lo = [...obj.head_region.lo];
     state.region.hi = [...obj.head_region.hi];
     syncProxyFromRegion();
   }
-  if (obj.head_mesh && state.meshes.length) {
-    const m = state.meshes.find((x) => x.name === obj.head_mesh);
-    if (m) selectMesh(m);
+  if (state.meshes.length) {
+    let target = null;
+    if (obj.head_mesh_index != null) {
+      target = state.meshes.find((m) => {
+        const a = state.gltf.parser.associations.get(m);
+        return a && a.meshes === obj.head_mesh_index;
+      });
+    }
+    if (!target && obj.head_mesh) target = state.meshes.find((x) => x.name === obj.head_mesh);
+    if (target && target !== state.mesh) selectMesh(target);
   }
-  refreshGuiFromCfg();
+  state.cutSig = null; // force geometry rebuild with the imported cut settings
+  refreshGui();
   recompute();
+}
+
+// mutate state.cfg in place so lil-gui controllers stay bound
+function assignCfgInPlace(src) {
+  for (const [k, v] of Object.entries(src)) {
+    if (Array.isArray(v) && Array.isArray(state.cfg[k])) {
+      state.cfg[k].length = 0;
+      state.cfg[k].push(...v);
+    } else {
+      state.cfg[k] = v;
+    }
+  }
 }
 
 function download(bytes, name, type = 'application/octet-stream') {
@@ -432,6 +469,7 @@ const guiState = {
   showHelpers: true,
   xray: false,
   jawOpen: 0,
+  pucker: 0,
   audioStrength: driver.strength,
   audioSmoothing: driver.smoothing,
   audioFloor: driver.floor,
@@ -444,11 +482,18 @@ const guiState = {
 const fFile = gui.addFolder('File');
 fFile.add({ load: () => document.getElementById('fileGlb').click() }, 'load').name('Load GLB…');
 fFile.add({ exp: () => {
-  try { download(buildRiggedGLB(), `${baseName()}.rigged.glb`, 'model/gltf-binary'); setStatus('Exported rigged GLB'); }
+  try {
+    const bytes = buildRiggedGLB();
+    const name = `${baseName()}.rigged.glb`;
+    download(bytes, name, 'model/gltf-binary');
+    idbSet('lastRigged', { name, bytes }).catch(() => {});
+    setStatus('Exported rigged GLB — it will auto-open in the game preview');
+  }
   catch (e) { setStatus('⚠ ' + e.message); console.error(e); }
 } }, 'exp').name('Export rigged GLB');
 fFile.add({ exp: () => download(JSON.stringify(exportConfigObject(), null, 2), `${baseName()}.config.json`, 'application/json') }, 'exp').name('Export config JSON');
 fFile.add({ imp: () => document.getElementById('fileCfg').click() }, 'imp').name('Import config JSON…');
+fFile.add({ pv: () => { window.location.href = './preview.html'; } }, 'pv').name('Open game preview →');
 
 const fHead = gui.addFolder('Head region');
 const onMeshPick = (label) => {
@@ -457,7 +502,7 @@ const onMeshPick = (label) => {
 };
 let meshCtrl = fHead.add(guiState, 'mesh', []).name('head mesh').onChange(onMeshPick);
 fHead.add(guiState, 'gizmoMode', ['off', 'region: move', 'region: scale', 'mouth anchor']).name('gizmo').onChange(applyGizmoMode);
-fHead.add({ re: () => { const g = guessHeadBox(state.mesh.geometry.attributes.position.array); state.region.lo = g.lo; state.region.hi = g.hi; syncProxyFromRegion(); recompute(); snapAnchorToLips(); } }, 're').name('Re-guess head box');
+fHead.add({ re: () => { const g = guessHeadBox(pristinePositions()); state.region.lo = g.lo; state.region.hi = g.hi; syncProxyFromRegion(); recompute(); snapAnchorToLips(); } }, 're').name('Re-guess head box');
 fHead.add({ sn: () => snapAnchorToLips() }, 'sn').name('Snap anchor to lips');
 fHead.add({ fr: () => frameRegion() }, 'fr').name('Frame head');
 
@@ -466,11 +511,19 @@ fOrient.add(state.cfg, 'front_axis', ['x', 'y', 'z']).name('front axis').onChang
 fOrient.add(state.cfg, 'front_sign', { '+1': 1, '-1': -1 }).name('front sign').onChange((v) => { state.cfg.front_sign = Number(v); recompute(); }).listen();
 
 const fJaw = gui.addFolder('Mouth / jaw');
+fJaw.add(state.cfg, 'lip_cut').name('lip cut (open mouth)').onChange(recompute).listen();
+fJaw.add(state.cfg, 'lip_cut_width_frac', 0.1, 1, 0.01).name('cut width').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_height_frac', 0, 1, 0.005).name('mouth height').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_region_frac', 0.02, 0.6, 0.005).name('region σ').onChange(recompute).listen();
 fJaw.add(state.cfg, 'jaw_strength_frac', 0, 0.5, 0.005).name('jaw strength').onChange(recompute).listen();
 fJaw.add(state.cfg, 'jaw_forward', -0.5, 1, 0.01).name('jaw forward').onChange(recompute).listen();
 fJaw.add(state.cfg, 'region_falloff_frac', 0.005, 0.3, 0.005).name('edge falloff').onChange(recompute).listen();
+
+const fPuck = gui.addFolder('Pucker (o/u lips)');
+fPuck.add(state.cfg, 'add_pucker').name('export mouthPucker').onChange(recompute).listen();
+fPuck.add(state.cfg, 'pucker_strength', 0, 1, 0.01).name('strength').onChange(recompute).listen();
+fPuck.add(state.cfg, 'pucker_forward_frac', 0, 0.2, 0.005).name('forward push').onChange(recompute).listen();
+fPuck.close();
 
 const fCav = gui.addFolder('Cavity');
 fCav.add(state.cfg, 'cavity_depth_frac', 0, 1, 0.01).name('depth').onChange(recompute).listen();
@@ -480,6 +533,9 @@ fCav.add(state.cfg, 'cavity_depth_frac', 0, 1, 0.01).name('depth').onChange(reco
 ['x','y','z'].forEach((ax, i) => {
   fCav.add(state.cfg.cavity_offset_frac, i, -0.5, 0.5, 0.005).name(`offset ${ax}`).onChange(recompute).listen();
 });
+['x','y','z'].forEach((ax, i) => {
+  fCav.add(state.cfg.cavity_rotation_deg, i, -90, 90, 1).name(`rotate ${ax}°`).onChange(recompute).listen();
+});
 
 const fTon = gui.addFolder('Tongue');
 ['x','y','z'].forEach((ax, i) => {
@@ -488,10 +544,14 @@ const fTon = gui.addFolder('Tongue');
 ['x','y','z'].forEach((ax, i) => {
   fTon.add(state.cfg.tongue_offset_frac, i, -0.5, 0.5, 0.005).name(`offset ${ax}`).onChange(recompute).listen();
 });
+['x','y','z'].forEach((ax, i) => {
+  fTon.add(state.cfg.tongue_rotation_deg, i, -90, 90, 1).name(`rotate ${ax}°`).onChange(recompute).listen();
+});
 fTon.close();
 
 const fPrev = gui.addFolder('Preview');
 fPrev.add(guiState, 'jawOpen', 0, 1, 0.01).name('jawOpen').listen().onChange((v) => { state.jawOpen = v; });
+fPrev.add(guiState, 'pucker', 0, 1, 0.01).name('mouthPucker').onChange((v) => { state.pucker = v; });
 fPrev.add(guiState, 'showHelpers').name('show gizmos').onChange((v) => {
   for (const k of ['regionBox', 'anchorMarker']) if (helpers[k]) helpers[k].visible = v;
   helpers.regionProxy.visible = v;
@@ -514,11 +574,15 @@ fAudio.add(guiState, 'audioFloor', 0, 0.3, 0.005).name('noise floor').onChange((
 const fEl = fAudio.addFolder('ElevenLabs');
 fEl.add(guiState, 'elText').name('text');
 fEl.add(guiState, 'elVoiceId').name('voice id');
-fEl.add(guiState, 'elApiKey').name('api key');
+fEl.add(guiState, 'elApiKey').name('api key (optional)');
 fEl.add({ s: async () => {
   try {
     state.audioDrives = true;
-    await driver.speakFromElevenLabs(guiState.elText, guiState.elVoiceId, guiState.elApiKey);
+    if (guiState.elApiKey) {
+      await driver.speakFromElevenLabs(guiState.elText, guiState.elVoiceId, guiState.elApiKey);
+    } else {
+      await driver.speakViaProxy(guiState.elText, guiState.elVoiceId); // server-side key
+    }
   } catch (e) { setStatus('⚠ ' + e.message); }
   finally { state.audioDrives = false; }
 } }, 's').name('Speak');
@@ -531,22 +595,10 @@ function rebuildMeshDropdown() {
   meshCtrl = meshCtrl.options(labels).name('head mesh').onChange(onMeshPick);
 }
 
-function refreshGuiFromCfg() {
-  // re-bind controllers that point at replaced cfg object
-  fOrient.controllers.concat(fJaw.controllers, fCav.controllers, fTon.controllers)
-    .forEach((c) => { c.object = pickCfgObject(c); c.updateDisplay(); });
-}
-function pickCfgObject(c) {
-  if (['front_axis','front_sign'].includes(c.property)) return state.cfg;
-  if (typeof c.property === 'number') {
-    // array controllers: match by parent folder
-    if (c.parent === fCav) return c._name?.startsWith('offset') ? state.cfg.cavity_offset_frac : state.cfg.cavity_scale;
-    if (c.parent === fTon) return c._name?.startsWith('offset') ? state.cfg.tongue_offset_frac : state.cfg.tongue_scale;
-  }
-  return state.cfg;
+function refreshGui() {
+  gui.controllersRecursive().forEach((c) => c.updateDisplay());
 }
 
-// gizmo modes
 function applyGizmoMode() {
   gizmo.detach();
   if (!state.mesh) return;
@@ -562,17 +614,15 @@ gizmo.addEventListener('objectChange', () => {
     syncRegionFromProxy();
     recompute();
   } else if (gizmo.object === helpers.anchorMarker && state.headBounds) {
-    // dragging the anchor writes mouth_height_frac (y) + lateral offsets (x, z)
     const p = helpers.anchorMarker.position;
     const hb = state.headBounds, cfg = state.cfg;
     const size = [hb.hi[0]-hb.lo[0], hb.hi[1]-hb.lo[1], hb.hi[2]-hb.lo[2]];
-    const fa = { x: 0, y: 1, z: 2 }[cfg.front_axis];
     cfg.mouth_height_frac = (p.y - hb.lo[1]) / Math.max(1e-9, size[1]);
     cfg.mouth_offset_frac = [0, 0, 0];
     const base = mouthAnchor(hb, { ...cfg, mouth_offset_frac: [0, 0, 0] }).mouth;
     const pArr = [p.x, p.y, p.z];
     for (const i of [0, 1, 2]) {
-      if (i === 1) continue; // vertical handled by height frac
+      if (i === 1) continue;
       cfg.mouth_offset_frac[i] = (pArr[i] - base[i]) / Math.max(1e-9, size[i]);
     }
     recompute();
@@ -580,7 +630,7 @@ gizmo.addEventListener('objectChange', () => {
 });
 
 // ---------------------------------------------------------------------------
-// file inputs + drag & drop
+// file inputs + drag & drop + dblclick pick
 // ---------------------------------------------------------------------------
 document.getElementById('fileGlb').addEventListener('change', async (e) => {
   const f = e.target.files[0];
@@ -611,7 +661,6 @@ window.addEventListener('drop', async (e) => {
   if (a) { state.audioDrives = true; driver.playFile(a).finally(() => { state.audioDrives = false; }); }
 });
 
-// double-click a mesh in the viewport to make it the head mesh
 const raycaster = new THREE.Raycaster();
 canvas.addEventListener('dblclick', (e) => {
   if (!state.meshes.length) return;
@@ -641,11 +690,11 @@ function frameObject(obj) {
 }
 
 function frameRegion() {
-  if (!state.mesh) return;
+  if (!state.mesh || !helpers.space) return;
   const { lo, hi } = state.region;
   const local = new THREE.Box3(new THREE.Vector3(...lo), new THREE.Vector3(...hi));
-  state.mesh.updateWorldMatrix(true, false);
-  const world = local.applyMatrix4(state.mesh.matrixWorld);
+  helpers.space.updateWorldMatrix(true, false);
+  const world = local.applyMatrix4(helpers.space.matrixWorld);
   const c = world.getCenter(new THREE.Vector3());
   const s = world.getSize(new THREE.Vector3()).length();
   orbit.target.copy(c);
@@ -655,14 +704,15 @@ function frameRegion() {
   camera.position.copy(c).add(dir.normalize().multiplyScalar(s * 1.6));
 }
 
-// render loop
 function tick() {
   requestAnimationFrame(tick);
   const audioVal = driver.update();
-  if (state.mesh && state.mesh._facerigMorphIndex != null) {
+  const m = state.mesh;
+  if (m && m._facerigJaw != null && m.morphTargetInfluences) {
     const v = state.audioDrives || guiState.micOn ? audioVal : state.jawOpen;
-    state.mesh.morphTargetInfluences[state.mesh._facerigMorphIndex] = v;
-    if (state.audioDrives || guiState.micOn) { guiState.jawOpen = v; }
+    m.morphTargetInfluences[m._facerigJaw] = v;
+    m.morphTargetInfluences[m._facerigPucker] = state.pucker;
+    if (state.audioDrives || guiState.micOn) guiState.jawOpen = v;
   }
   orbit.update();
   renderer.render(scene, camera);
@@ -684,8 +734,10 @@ window.__facerig = {
     return !!m;
   },
   setRegionBox: (lo, hi) => { state.region.lo = [...lo]; state.region.hi = [...hi]; syncProxyFromRegion(); recompute(); },
-  setConfig: (partial) => { state.cfg = mergeCfg({ ...state.cfg, ...partial }); refreshGuiFromCfg(); recompute(); },
+  setConfig: (partial) => { assignCfgInPlace(mergeCfg({ ...state.cfg, ...partial })); refreshGui(); recompute(); },
   setJawOpen: (v) => { state.jawOpen = v; guiState.jawOpen = v; },
+  setPucker: (v) => { state.pucker = v; guiState.pucker = v; },
+  snapAnchorToLips,
   exportGLB: () => buildRiggedGLB(),
   exportConfig: exportConfigObject,
   applyConfig: applyConfigObject,

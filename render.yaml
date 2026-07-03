@@ -1,0 +1,19 @@
+# Render blueprint — deploy facerig as a web service.
+#
+# On https://dashboard.render.com: New → Blueprint → point at this repo.
+# Then set ELEVENLABS_API_KEY (and optionally ELEVENLABS_VOICE_ID) in the
+# service's Environment tab. The calibration tool is at /, the game preview
+# at /preview.html.
+services:
+  - type: web
+    name: facerig
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.mjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: ELEVENLABS_API_KEY
+        sync: false          # set in the dashboard, never committed
+      - key: ELEVENLABS_VOICE_ID
+        sync: false

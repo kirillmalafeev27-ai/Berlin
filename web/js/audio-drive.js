@@ -71,6 +71,30 @@ export class AmplitudeDriver {
     this._analyser.connect(this._ctx.destination);
   }
 
+  async playArrayBuffer(buf, mime = 'audio/mpeg') {
+    const url = URL.createObjectURL(new Blob([buf], { type: mime }));
+    const audio = new Audio(url);
+    await this.resume();
+    this.connectElement(audio);
+    await audio.play();
+    return new Promise((r) => { audio.onended = () => { URL.revokeObjectURL(url); r(); }; });
+  }
+
+  // TTS through the facerig server (server holds the ElevenLabs key). The
+  // /api/tts endpoint returns { audio_base64, alignment } from the
+  // with-timestamps ElevenLabs endpoint.
+  async speakViaProxy(text, voiceId, base = '') {
+    const res = await fetch(`${base}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+    });
+    if (!res.ok) throw new Error(`tts proxy ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const bin = Uint8Array.from(atob(data.audio_base64), (c) => c.charCodeAt(0));
+    return this.playArrayBuffer(bin.buffer);
+  }
+
   async speakFromElevenLabs(text, voiceId, apiKey, opts = {}) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
