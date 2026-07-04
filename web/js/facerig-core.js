@@ -28,11 +28,15 @@ export const DEFAULT_CFG = {
   // the low-poly angularity, and give the lip edge real thickness
   lip_subdiv: 3,                       // splits per seam edge (1 = off) — smooth opening arc
   lip_rim: true,                       // lip rolls + welded mouth pocket (v0.5: on by default)
-  rim_depth: 0.12,                     // how far the rim goes back (frac of head depth)
-  rim_segments: 2,                     // ring loops across the rim, 1..4
-  bevel_width: 0.03,                   // rounded lip-edge thickness (frac of head height)
-  bevel_segments: 2,                   // ring loops in the bevel arc, 0..3
-  edge_smooth: 3,                      // Laplacian iterations on the rim path (tames Meshy edges)
+  rim_depth: 0.12,                     // how far the pocket walls go back (frac of head depth)
+  rim_segments: 2,                     // ring loops across the pocket rim walls, 1..4
+  bevel_width: 0.022,                  // lip roll radius (frac of head height)
+  bevel_segments: 3,                   // ring loops across the outer roll arc, 1..4
+  edge_smooth: 3,                      // Laplacian iterations on the roll path (tames Meshy edges)
+  // v0.5: front-facing lip volume — without these the roll is extruded only
+  // backward and reads as a flat slit when viewed head-on
+  lip_bulge: 0.02,                     // forward crest of the lip roll (frac of head height)
+  lip_split: 0.012,                    // static separation of upper/lower rolls (frac of head h)
   add_pucker: true,                    // web extension: also emit a mouthPucker morph
   pucker_strength: 0.55,               // lateral squeeze toward mouth center, 0..1
   pucker_forward_frac: 0.06,           // forward lip push of the pucker (frac of head h)
@@ -633,9 +637,11 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
     }
   }
 
-  const B = Math.max(0, Math.round(cfg.bevel_segments));
+  const B = Math.max(1, Math.round(cfg.bevel_segments));
   const R = Math.max(1, Math.round(cfg.rim_segments));
-  const bevelW = B > 0 ? cfg.bevel_width * size[1] : 0;
+  const bevelW = cfg.bevel_width * size[1];   // roll radius
+  const bulgeW = cfg.lip_bulge * size[1];     // forward crest
+  const splitW = cfg.lip_split * size[1];     // static roll separation per side
   const rimD = cfg.rim_depth * size[fa];
   const front = [0, 0, 0]; front[fa] = sign;
   const cornerW = (i) => Math.pow(Math.sin(Math.PI * i / m), 0.7);
@@ -647,31 +653,33 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
     ? [positions[vi*3], positions[vi*3+1], positions[vi*3+2]]
     : verts[vi - nBase].pos;
 
-  // BEVEL strip only lives in the (textured) head primitive: a ~lip-thick
-  // rounded edge that keeps the skin texture. Everything deeper — the rim
-  // walls and the pocket — is dark, so the stretched face texture never
-  // smears into the mouth interior. Bevel verts move rigidly with their lip
-  // (scale 1): the lip edge stays crisp at any jawOpen.
-  const buildBevel = (sideKey, vertSign) => {
+  // LIP ROLL (textured, in the head primitive): the outer surface of the lip.
+  // v0.4 extruded backward only, so head-on the player looked straight down
+  // the extrusion axis and saw a flat slit. The roll arcs FORWARD (lip_bulge)
+  // and AWAY from the mouth line (lip_split + bevel radius) — a low-poly lip
+  // pad that reads from the front — then tucks slightly behind the face plane
+  // where it visually merges into the skin. Roll verts move rigidly with
+  // their lip (scale 1): the lip stays crisp at any jawOpen.
+  const buildRoll = (sideKey, vertSign) => {
     const rings = [pts.map((p) => p[sideKey])];
     for (let k = 1; k <= B; k++) {
-      const bp = k / B;
-      const back = bevelW * Math.sin(bp * Math.PI / 2);
-      const vert = vertSign * bevelW * (1 - Math.cos(bp * Math.PI / 2));
+      const t = k / B;
+      const fwd = bulgeW * Math.sin(Math.PI * t) - 0.2 * bulgeW * t;
+      const vert = vertSign * (splitW * t + bevelW * (1 - Math.cos(Math.PI * t)));
       const ring = [];
       for (let i = 0; i <= m; i++) {
         const w = cornerW(i);
         const pos = [S[i][0], S[i][1], S[i][2]];
         pos[1] += vert * w;
-        pos[fa] -= sign * back * w;
+        pos[fa] += sign * fwd * w;
         const vi = nBase + verts.length;
         verts.push({ src: pts[i][sideKey], pos, scale: 1 });
         ring.push(vi);
       }
       rings.push(ring);
     }
-    // quads; winding faces the opening (down-front for upper, up-front for lower)
-    const want = [front[0], front[1] - vertSign * 0.6, front[2]];
+    // quads; visible face points forward and away from the mouth line
+    const want = [front[0], front[1] + vertSign * 0.6, front[2]];
     let flip = null;
     for (let k = 1; k <= B; k++) {
       for (let i = 0; i < m; i++) {
@@ -684,46 +692,56 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
         else tris.push(a, b, c, a, c, d);
       }
     }
-    return rings[rings.length - 1]; // weld ring (ring0 itself when B = 0)
+    return rings[rings.length - 1]; // roll-end ring
   };
 
-  const upperWeld = buildBevel('upperV', +1);
-  const lowerWeld = buildBevel('lowerV', -1);
+  const upperEnd = buildRoll('upperV', +1);
+  const lowerEnd = buildRoll('lowerV', -1);
 
-  // POCKET (dark primitive): starts at a closed loop that reuses the bevel
-  // weld-ring records verbatim — identical positions, sources and delta
-  // scales, so the weld is exact at any jawOpen. The loop is extruded
-  // backward (rim walls, delta fading 1 → 0.55) and then converges to a
-  // rounded cap (0.55 → 0).
+  // POCKET (dark primitive). Two exact welds by record reuse:
+  //   ring 0 — the SEAM verts themselves (the visible slit line): the mouth
+  //            interior starts right at the lip line, no backface tricks;
+  //   ring 1 — the roll-end records (the inner lining of each roll).
+  // Then backward rim walls, a converge and a rounded cap.
   const weldRec = (vi) => vi < nBase
     ? { src: vi, pos: vPos(vi), scale: 1 }
     : verts[vi - nBase];
-  const loop = [];        // { rec, vertSign, w }
-  for (let i = 0; i <= m; i++) loop.push({ rec: weldRec(upperWeld[i]), vs: +1, w: cornerW(i) });
-  for (let i = m - 1; i >= 1; i--) loop.push({ rec: weldRec(lowerWeld[i]), vs: -1, w: cornerW(i) });
-  const L = loop.length;
+  const mkLoop = (ringOf) => {
+    const loop = [];
+    for (let i = 0; i <= m; i++) loop.push({ rec: ringOf('upperV', i), w: cornerW(i) });
+    for (let i = m - 1; i >= 1; i--) loop.push({ rec: ringOf('lowerV', i), w: cornerW(i) });
+    return loop;
+  };
+  const seamLoop = mkLoop((side, i) => weldRec(pts[i][side]));
+  const endLoop = mkLoop((side, i) => weldRec((side === 'upperV' ? upperEnd : lowerEnd)[i]));
+  const L = seamLoop.length;
 
-  const pocketVerts = loop.map(({ rec }) => ({ src: rec.src, pos: [...rec.pos], scale: rec.scale }));
-  const pocketTris = [];
+  const pocketVerts = [];
+  const pushLoop = (loop, mut) => {
+    for (const { rec, w } of loop) {
+      pocketVerts.push(mut ? mut(rec, w) : { src: rec.src, pos: [...rec.pos], scale: rec.scale });
+    }
+  };
+  pushLoop(seamLoop);   // ring 0: welded at the slit line
+  pushLoop(endLoop);    // ring 1: welded at the roll ends
 
-  // rim walls: straight back, keeping the bevel's vertical separation.
-  // delta scale = lerp(1, 0.55, t), eased back to 1 at the corners (w → 0)
-  // where the rings collapse onto the corner verts.
+  // rim walls: straight back from the roll ends.
+  // delta scale = lerp(1, 0.55, t), eased to 1 at the corners (w → 0).
   for (let j = 1; j <= R; j++) {
     const t = j / R;
-    for (const { rec, w } of loop) {
+    pushLoop(endLoop, (rec, w) => {
       const pos = [...rec.pos];
       pos[fa] -= sign * rimD * t * w;
-      pocketVerts.push({ src: rec.src, pos, scale: 1 - 0.45 * t * w });
-    }
+      return { src: rec.src, pos, scale: 1 - 0.45 * t * w };
+    });
   }
 
   // converge to the cap
   const center = [...mouth];
   center[fa] -= sign * (rimD + cfg.cavity_depth_frac * size[fa] * 0.6);
-  center[1] = loop.reduce((s, { rec }) => s + rec.pos[1], 0) / L;
+  center[1] = seamLoop.reduce((s, { rec }) => s + rec.pos[1], 0) / L;
   const PJ = 3;
-  const rimBase = R * L; // offset of the last rim ring within pocketVerts
+  const rimBase = (1 + R) * L; // offset of the last rim ring within pocketVerts
   for (let j = 1; j <= PJ; j++) {
     const a = j / PJ;
     const ease = a * a * (3 - 2 * a);
@@ -741,27 +759,33 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
     }
   }
   const capIdx = pocketVerts.length;
-  pocketVerts.push({ src: loop[0].rec.src, pos: [...center], scale: 0 });
+  pocketVerts.push({ src: seamLoop[0].rec.src, pos: [...center], scale: 0 });
 
-  // tube + cap, winding so the interior faces the opening (toward +front)
-  const rings = R + PJ;
-  let flip = null;
-  for (let j = 0; j < rings; j++) {
+  // tube + cap, winding so the interior faces the opening (toward +front).
+  // The flip probe uses a backward rim-wall quad (segment 1) — the first
+  // segment lines the roll interior and its orientation vs `front` is
+  // ambiguous; the tube is a consistent manifold, one decision covers all.
+  const pocketTris = [];
+  const ringCount = 1 + R + PJ; // transitions: seam→end→rim…→converge…
+  let flip = false;
+  {
+    const j = 1, i = Math.floor(L / 4);
+    const a = j*L + i, b = j*L + ((i + 1) % L), c = (j+1)*L + ((i + 1) % L);
+    const nrm = triNormal(pocketVerts[a].pos, pocketVerts[b].pos, pocketVerts[c].pos);
+    if (nrm) flip = (nrm[0]*front[0] + nrm[1]*front[1] + nrm[2]*front[2]) < 0;
+  }
+  for (let j = 0; j < ringCount; j++) {
     for (let i = 0; i < L; i++) {
       const i2 = (i + 1) % L;
       const a = j*L + i, b = j*L + i2, c = (j+1)*L + i2, d = (j+1)*L + i;
-      if (flip === null) {
-        const nrm = triNormal(pocketVerts[a].pos, pocketVerts[b].pos, pocketVerts[c].pos);
-        if (nrm) flip = (nrm[0]*front[0] + nrm[1]*front[1] + nrm[2]*front[2]) < 0;
-      }
       if (flip) pocketTris.push(a, c, b, a, d, c);
       else pocketTris.push(a, b, c, a, c, d);
     }
   }
   for (let i = 0; i < L; i++) {
     const i2 = (i + 1) % L;
-    if (flip) pocketTris.push(rings*L + i, rings*L + i2, capIdx);
-    else pocketTris.push(rings*L + i2, rings*L + i, capIdx);
+    if (flip) pocketTris.push(ringCount*L + i, ringCount*L + i2, capIdx);
+    else pocketTris.push(ringCount*L + i2, ringCount*L + i, capIdx);
   }
 
   return {

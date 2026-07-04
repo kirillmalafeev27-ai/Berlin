@@ -371,7 +371,8 @@ function recompute() {
     ? JSON.stringify([state.anchor.mouth, cfg.lip_cut_width_frac,
                       state.region.lo, state.region.hi, cfg.front_axis, cfg.front_sign,
                       cfg.lip_subdiv, cfg.lip_rim, cfg.rim_depth, cfg.rim_segments,
-                      cfg.bevel_width, cfg.bevel_segments, cfg.edge_smooth])
+                      cfg.bevel_width, cfg.bevel_segments, cfg.edge_smooth,
+                      cfg.lip_bulge, cfg.lip_split])
     : 'off';
   if (sig !== state.cutSig) {
     state.cutSig = sig;
@@ -609,10 +610,12 @@ fJaw.add(state.cfg, 'lip_rim').name('volumetric lips (rim)').onChange((v) => {
   if (v && !state.cfg.lip_cut) { state.cfg.lip_cut = true; refreshGui(); }
   recompute();
 }).listen();
-fJaw.add(state.cfg, 'rim_depth', 0.02, 0.3, 0.005).name('rim depth').onChange(recompute).listen();
-fJaw.add(state.cfg, 'rim_segments', 1, 4, 1).name('rim segments').onChange(recompute).listen();
-fJaw.add(state.cfg, 'bevel_width', 0, 0.08, 0.002).name('bevel width').onChange(recompute).listen();
-fJaw.add(state.cfg, 'bevel_segments', 0, 3, 1).name('bevel segments').onChange(recompute).listen();
+fJaw.add(state.cfg, 'lip_bulge', 0, 0.06, 0.002).name('lip bulge (forward)').onChange(recompute).listen();
+fJaw.add(state.cfg, 'lip_split', 0, 0.05, 0.002).name('lip split').onChange(recompute).listen();
+fJaw.add(state.cfg, 'bevel_width', 0.004, 0.08, 0.002).name('roll radius').onChange(recompute).listen();
+fJaw.add(state.cfg, 'bevel_segments', 1, 4, 1).name('roll segments').onChange(recompute).listen();
+fJaw.add(state.cfg, 'rim_depth', 0.02, 0.3, 0.005).name('pocket depth').onChange(recompute).listen();
+fJaw.add(state.cfg, 'rim_segments', 1, 4, 1).name('pocket segments').onChange(recompute).listen();
 fJaw.add(state.cfg, 'edge_smooth', 0, 8, 1).name('edge smooth').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_height_frac', 0, 1, 0.005).name('mouth height').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_region_frac', 0.02, 0.6, 0.005).name('region σ').onChange(recompute).listen();
