@@ -366,7 +366,7 @@ export class GLBPatcher {
       scene.nodes = scene.nodes || [];
       scene.nodes.push(nodeIdx);
     }
-    return nodeIdx;
+    return { node: nodeIdx, mesh: meshIdx };
   }
 
   build() {

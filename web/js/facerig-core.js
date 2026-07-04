@@ -22,12 +22,12 @@ export const DEFAULT_CFG = {
   jaw_forward: 0.15,
   mouth_offset_frac: [0, 0, 0],        // web extension, 0 = python-identical
   region_falloff_frac: 0.05,           // web extension: soft edge of head box
-  lip_cut: false,                      // web extension: split verts along the mouth line
+  lip_cut: true,                       // split verts along the mouth line (v0.5: on by default)
   lip_cut_width_frac: 0.45,            // full slit width, fraction of head lateral size
   // volumetric mouth (v0.4): densify + round the slit so it doesn't inherit
   // the low-poly angularity, and give the lip edge real thickness
   lip_subdiv: 3,                       // splits per seam edge (1 = off) — smooth opening arc
-  lip_rim: false,                      // extrude an inner lip rim + welded mouth pocket
+  lip_rim: true,                       // lip rolls + welded mouth pocket (v0.5: on by default)
   rim_depth: 0.12,                     // how far the rim goes back (frac of head depth)
   rim_segments: 2,                     // ring loops across the rim, 1..4
   bevel_width: 0.03,                   // rounded lip-edge thickness (frac of head height)
@@ -1034,22 +1034,60 @@ export function cavityAndTonguePlacement(anchor, cfg) {
     cfg.cavity_scale[2] * size[2],
   ];
 
-  const tonCenter = [...cavCenter];
-  tonCenter[1] -= 0.25 * cfg.cavity_scale[1] * size[1];
-  // python used +0.15 here, which parks the tongue tip at the lip plane and
-  // pokes through closed lips on real heads (mustaches pull the snapped
-  // anchor forward). +0.06 keeps it hidden at rest, visible when the jaw drops.
-  tonCenter[fa] += sign * 0.06 * size[fa];
-  for (let i = 0; i < 3; i++) {
-    tonCenter[i] += (cfg.tongue_offset_frac[i] - cfg.cavity_offset_frac[i]) * size[i];
+  let tonCenter, tonRadii;
+  if (cfg.lip_rim) {
+    // NOTE: with lip_rim the exported tongue also carries a jawOpen morph
+    // (rides at TONGUE_FOLLOW of the jaw drop) — see tongueJawDelta below.
+    // v0.5: with the pocket mouth, the tongue is sized by the calibrated
+    // MOUTH (slit width), not the whole head, and rests fully inside the
+    // pocket: tip strictly behind the lip line, body below the mouth line.
+    const lat = lateralAxis(fa);
+    const W = cfg.lip_cut_width_frac * size[lat];  // full slit width
+    tonRadii = [
+      cfg.tongue_scale[0] * W * 2.2,
+      cfg.tongue_scale[1] * W * 2.2,
+      cfg.tongue_scale[2] * W * 2.2,
+    ];
+    const rimD = cfg.rim_depth * size[fa];
+    tonCenter = [...mouth];
+    tonCenter[fa] -= sign * (0.35 * rimD + tonRadii[fa]);
+    tonCenter[1] -= 1.0 * tonRadii[1];
+    for (let i = 0; i < 3; i++) tonCenter[i] += cfg.tongue_offset_frac[i] * size[i];
+  } else {
+    tonCenter = [...cavCenter];
+    tonCenter[1] -= 0.25 * cfg.cavity_scale[1] * size[1];
+    // python used +0.15 here, which parks the tongue tip at the lip plane and
+    // pokes through closed lips on real heads (mustaches pull the snapped
+    // anchor forward). +0.06 keeps it hidden at rest, visible when the jaw drops.
+    tonCenter[fa] += sign * 0.06 * size[fa];
+    for (let i = 0; i < 3; i++) {
+      tonCenter[i] += (cfg.tongue_offset_frac[i] - cfg.cavity_offset_frac[i]) * size[i];
+    }
+    tonRadii = [
+      cfg.tongue_scale[0] * size[0],
+      cfg.tongue_scale[1] * size[1],
+      cfg.tongue_scale[2] * size[2],
+    ];
   }
-  const tonRadii = [
-    cfg.tongue_scale[0] * size[0],
-    cfg.tongue_scale[1] * size[1],
-    cfg.tongue_scale[2] * size[2],
-  ];
 
   return { cavCenter, cavRadii, tonCenter, tonRadii };
+}
+
+// The tongue is anchored to the lower jaw in real anatomy: at full jawOpen it
+// drops by this fraction of the jaw strength (uniform delta over the whole
+// tongue mesh), so it reads as lying in the lower mouth instead of hanging
+// from the palate.
+export const TONGUE_FOLLOW = 0.7;
+
+export function tongueJawDelta(vertCount, anchor, cfg) {
+  const { size, fa, sign } = anchor;
+  const strength = cfg.jaw_strength_frac * size[1];
+  const delta = new Float32Array(vertCount * 3);
+  for (let i = 0; i < vertCount; i++) {
+    delta[i * 3 + 1] = -TONGUE_FOLLOW * strength;
+    delta[i * 3 + fa] = sign * TONGUE_FOLLOW * strength * cfg.jaw_forward;
+  }
+  return delta;
 }
 
 // Bounds of the vertices that fall inside a box (or of all vertices if box

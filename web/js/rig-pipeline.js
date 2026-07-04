@@ -7,6 +7,7 @@ import {
   mergeCfg, mouthAnchor, jawDelta, puckerDelta, cutLips, dupAttribute,
   cavityAndTonguePlacement, boundsInBox, bakeEllipsoid,
   knifeSeam, subdivideSeam, buildMouthVolume, computeNormalsFor, blendProv,
+  tongueJawDelta,
 } from './facerig-core.js';
 import {
   GLBPatcher, readAccessor, findHeadJointNode, nodeWorldMatrix, M4,
@@ -25,9 +26,27 @@ import {
 //   volume,                   // buildMouthVolume result or null
 //   counts: { subdiv, dup, rim },
 // }
-export function mouthSurgery(positions0, indices0, anchor, cfg, region) {
+export function mouthSurgery(positions0raw, indices0, anchorRaw, cfg, region0) {
   const lipCut = cfg.lip_cut || cfg.lip_rim;
   if (!lipCut) return null;
+
+  // Normalize the working scale: models arrive in wildly different units
+  // (Mixamo FBX meshes are 1/100 scale), so all internal math runs with the
+  // head height ≈ 1 unit and results are scaled back on the way out. Every
+  // formula is fraction-based anyway; this pins the residual absolute
+  // epsilons and keeps 16 differently-scaled characters behaving identically.
+  const S = 1 / (anchorRaw.size[1] || 1);
+  const positions0 = new Float32Array(positions0raw.length);
+  for (let i = 0; i < positions0.length; i++) positions0[i] = positions0raw[i] * S;
+  const anchor = {
+    mouth: anchorRaw.mouth.map((v) => v * S),
+    size: anchorRaw.size.map((v) => v * S),
+    fa: anchorRaw.fa, sign: anchorRaw.sign,
+  };
+  const region = region0
+    ? { lo: region0.lo.map((v) => v * S), hi: region0.hi.map((v) => v * S) }
+    : null;
+
   const n0 = positions0.length / 3;
   // provenance per new vertex: weighted list of ORIGINAL verts [[i, w], ...]
   const prov = [];
@@ -87,7 +106,21 @@ export function mouthSurgery(positions0, indices0, anchor, cfg, region) {
   }
 
   if (!prov.length && !cut) return null;
-  return { positions: pos, indices: idx, preRimCount, prov, mask, volume, counts };
+
+  // scale everything back to the model's original units
+  const inv = 1 / S;
+  const outPos = new Float32Array(pos.length);
+  for (let i = 0; i < pos.length; i++) outPos[i] = pos[i] * inv;
+  if (volume) {
+    // all volume/pocket records own fresh pos arrays (no shared references)
+    for (const v of volume.verts) {
+      v.pos[0] *= inv; v.pos[1] *= inv; v.pos[2] *= inv;
+    }
+    for (const v of volume.pocket.verts) {
+      v.pos[0] *= inv; v.pos[1] *= inv; v.pos[2] *= inv;
+    }
+  }
+  return { positions: outPos, indices: idx, preRimCount, prov, mask, volume, counts };
 }
 
 // configReport: the object produced by the tool's "Export config JSON"
@@ -261,7 +294,20 @@ export function rigGLB(arrayBuffer, configReport) {
       { rotationDeg: cfg.cavity_rotation_deg, flipped: true });
     patcher.addMeshNode('MouthCavity', cavGeo, cavMat, { parentNode, matrix });
   }
-  patcher.addMeshNode('Tongue', tonGeo, tonMat, { parentNode, matrix });
+  const tongue = patcher.addMeshNode('Tongue', tonGeo, tonMat, { parentNode, matrix });
+
+  // the tongue rides with the lower jaw (its own jawOpen morph, driven by the
+  // same runtime loop that drives every mesh with a jawOpen target)
+  if (pocket) {
+    const tonVerts = tonGeo.positions.length / 3;
+    const tonMorphs = [{ name: 'jawOpen',
+      deltasPerPrimitive: [tongueJawDelta(tonVerts, anchor, cfg)] }];
+    if (cfg.add_pucker) {
+      tonMorphs.push({ name: 'mouthPucker',
+        deltasPerPrimitive: [new Float32Array(tonVerts * 3)] });
+    }
+    patcher.addMorphTargets(tongue.mesh, tonMorphs);
+  }
 
   return { bytes: patcher.build(), stats, meshIndex };
 }

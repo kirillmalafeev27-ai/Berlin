@@ -439,6 +439,7 @@ function recompute() {
   helpers.tongue.scale.fromArray(place.tonRadii);
   helpers.tongue.rotation.set(...cfg.tongue_rotation_deg.map((d) => d * Math.PI / 180));
   helpers.tongue.material.color.setRGB(...cfg.tongue_color.slice(0, 3));
+  state._tongueBase = [...place.tonCenter]; // tick() rides it with the jaw
 
   updateStatsOverlay();
 }
@@ -460,12 +461,15 @@ function updateStatsOverlay() {
   if (!hb) { el.textContent = ''; return; }
   const h = hb.hi[1] - hb.lo[1];
   const lipCut = state.cfg.lip_cut || state.cfg.lip_rim;
+  // models arrive in arbitrary units (Mixamo meshes are 1/100 scale) — show
+  // adaptive precision plus the scale-independent percentage, which is the
+  // number that actually matters
   el.innerHTML =
     `head verts in box: <b>${s.regionVerts}</b> · driven by jaw: <b>${s.driven}</b>` +
     (lipCut ? ` · seam verts: knife <b>${s.knifeAdded}</b> + subdiv <b>${s.subdivAdded}</b> + split <b>${s.cutAdded}</b>` : '') +
     (state.cfg.lip_rim ? ` · rim <b>${s.rimVerts}</b>` : '') + '<br>' +
-    `head height: ${h.toFixed(3)} · max open offset: ${s.maxOffset.toFixed(4)} ` +
-    `(${(s.maxOffset / h * 100).toFixed(1)}% of head)`;
+    `head height: ${Number(h.toPrecision(3))} (model units) · ` +
+    `max open: <b>${(s.maxOffset / h * 100).toFixed(1)}%</b> of head at jawOpen=1`;
   if (s.driven === 0) el.innerHTML += '<br>⚠ no vertices driven — check front axis/sign and mouth height';
   if (lipCut && !s.knifeAdded && !s.cutAdded) el.innerHTML += '<br>⚠ no slit created — widen the cut or move the anchor to the lip line';
 }
@@ -647,8 +651,12 @@ const fTon = gui.addFolder('Tongue');
 fTon.close();
 
 const fPrev = gui.addFolder('Preview');
-fPrev.add(guiState, 'jawOpen', 0, 1, 0.01).name('jawOpen').listen().onChange((v) => { state.jawOpen = v; });
-fPrev.add(guiState, 'pucker', 0, 1, 0.01).name('mouthPucker').onChange((v) => { state.pucker = v; });
+// clamp: lil-gui sliders cap at 1 but typed values can overflow — a morph
+// influence beyond 1 is not a supported state (tune jaw strength instead)
+fPrev.add(guiState, 'jawOpen', 0, 1, 0.01).name('jawOpen').listen()
+  .onChange((v) => { state.jawOpen = Math.min(1, Math.max(0, v)); });
+fPrev.add(guiState, 'pucker', 0, 1, 0.01).name('mouthPucker')
+  .onChange((v) => { state.pucker = Math.min(1, Math.max(0, v)); });
 fPrev.add(guiState, 'showHelpers').name('show gizmos').onChange((v) => {
   for (const k of ['regionBox', 'anchorMarker']) if (helpers[k]) helpers[k].visible = v;
   helpers.regionProxy.visible = v;
@@ -813,6 +821,14 @@ function tick() {
       helpers.pocket.morphTargetInfluences[0] = v;
       helpers.pocket.morphTargetInfluences[1] = state.pucker;
     }
+    // tongue rides with the lower jaw (matches the exported tongue morph)
+    if (helpers.tongue && state._tongueBase && state.anchor && state.cfg.lip_rim) {
+      const a = state.anchor, strength = state.cfg.jaw_strength_frac * a.size[1];
+      helpers.tongue.position.fromArray(state._tongueBase);
+      helpers.tongue.position.y -= 0.7 * strength * v;
+      const fwd = a.sign * 0.7 * strength * state.cfg.jaw_forward * v;
+      helpers.tongue.position.setComponent(a.fa, state._tongueBase[a.fa] + fwd);
+    }
     if (state.audioDrives || guiState.micOn) guiState.jawOpen = v;
   }
   orbit.update();
@@ -836,8 +852,8 @@ window.__facerig = {
   },
   setRegionBox: (lo, hi) => { state.region.lo = [...lo]; state.region.hi = [...hi]; syncProxyFromRegion(); recompute(); },
   setConfig: (partial) => { assignCfgInPlace(mergeCfg({ ...state.cfg, ...partial })); refreshGui(); recompute(); },
-  setJawOpen: (v) => { state.jawOpen = v; guiState.jawOpen = v; },
-  setPucker: (v) => { state.pucker = v; guiState.pucker = v; },
+  setJawOpen: (v) => { const c = Math.min(1, Math.max(0, v)); state.jawOpen = c; guiState.jawOpen = c; },
+  setPucker: (v) => { const c = Math.min(1, Math.max(0, v)); state.pucker = c; guiState.pucker = c; },
   snapAnchorToLips,
   exportGLB: () => buildRiggedGLB(),
   exportConfig: exportConfigObject,
