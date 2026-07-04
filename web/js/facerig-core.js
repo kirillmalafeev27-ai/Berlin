@@ -37,6 +37,8 @@ export const DEFAULT_CFG = {
   // backward and reads as a flat slit when viewed head-on
   lip_bulge: 0.02,                     // forward crest of the lip roll (frac of head height)
   lip_split: 0.012,                    // static separation of upper/lower rolls (frac of head h)
+  lip_color: [0.85, 0.55, 0.55],       // vertex-color tint of the rolls (soft stylized pink)
+  lip_color_blend: 1.0,                // tint band width: <1 narrower, >1 wider/softer
   add_pucker: true,                    // web extension: also emit a mouthPucker morph
   pucker_strength: 0.55,               // lateral squeeze toward mouth center, 0..1
   pucker_forward_frac: 0.06,           // forward lip push of the pucker (frac of head h)
@@ -53,7 +55,7 @@ export const DEFAULT_CFG = {
 
 const ARRAY_KEYS = ['mouth_offset_frac', 'cavity_offset_frac', 'tongue_offset_frac',
   'cavity_scale', 'tongue_scale', 'cavity_color', 'tongue_color',
-  'cavity_rotation_deg', 'tongue_rotation_deg'];
+  'cavity_rotation_deg', 'tongue_rotation_deg', 'lip_color'];
 
 export function mergeCfg(cfg) {
   const out = { ...DEFAULT_CFG, ...(cfg || {}) };
@@ -667,13 +669,16 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
       const fwd = bulgeW * Math.sin(Math.PI * t) - 0.2 * bulgeW * t;
       const vert = vertSign * (splitW * t + bevelW * (1 - Math.cos(Math.PI * t)));
       const ring = [];
+      // tint peaks mid-roll and fades to skin at the slit line and at the
+      // outer edge — the 9.3 lip color band, applied via COLOR_0 later
+      const tint = Math.sin(Math.PI * t);
       for (let i = 0; i <= m; i++) {
         const w = cornerW(i);
         const pos = [S[i][0], S[i][1], S[i][2]];
         pos[1] += vert * w;
         pos[fa] += sign * fwd * w;
         const vi = nBase + verts.length;
-        verts.push({ src: pts[i][sideKey], pos, scale: 1 });
+        verts.push({ src: pts[i][sideKey], pos, scale: 1, tint: tint * w });
         ring.push(vi);
       }
       rings.push(ring);
@@ -793,6 +798,15 @@ export function buildMouthVolume(positions, indices, anchor, cfg, region) {
     tris: Uint32Array.from(tris),
     pocket: { verts: pocketVerts, tris: Uint32Array.from(pocketTris) },
   };
+}
+
+// 9.3: how strongly a roll vertex blends toward cfg.lip_color. `tint` is the
+// raw sin-dome weight stored on the vertex; lip_color_blend reshapes the band
+// (narrower < 1 < wider). Capped below 1 so lips never read as solid lipstick.
+export function lipTintAmount(tint, cfg) {
+  if (!tint) return 0;
+  const blend = Math.max(0.2, cfg.lip_color_blend || 1);
+  return Math.pow(tint, 1 / blend) * 0.85;
 }
 
 function triNormal(p, q, r) {

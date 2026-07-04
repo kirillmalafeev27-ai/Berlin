@@ -7,7 +7,7 @@ import {
   mergeCfg, mouthAnchor, jawDelta, puckerDelta, cutLips, dupAttribute,
   cavityAndTonguePlacement, boundsInBox, bakeEllipsoid,
   knifeSeam, subdivideSeam, buildMouthVolume, computeNormalsFor, blendProv,
-  tongueJawDelta,
+  tongueJawDelta, lipTintAmount,
 } from './facerig-core.js';
 import {
   GLBPatcher, readAccessor, findHeadJointNode, nodeWorldMatrix, M4,
@@ -199,6 +199,37 @@ export function rigGLB(arrayBuffer, configReport) {
         patcher.replacePrimitiveGeometry(meshIndex, pi, {
           prov: surgery.prov, overrides, indices: surgery.indices,
         });
+      }
+
+      // 9.3 lip tint: COLOR_0 vertex colors. Existing verts stay at their
+      // original color (or white — a no-op multiplier over the texture);
+      // roll verts blend toward lip_color with the sin-dome band, so the
+      // tint feathers into the skin with no hard mask edge.
+      if (volume) {
+        const prim = mesh.primitives[pi];
+        const total = pos.length / 3;
+        const colors = new Float32Array(total * 4).fill(1);
+        if (prim.attributes.COLOR_0 != null) {
+          const acc = json.accessors[prim.attributes.COLOR_0];
+          const src = patcher.getAccessorData(prim.attributes.COLOR_0);
+          const isz = src.length / total;
+          const norm = acc.componentType === 5121 ? 1 / 255
+                     : acc.componentType === 5123 ? 1 / 65535 : 1;
+          for (let i = 0; i < total; i++) {
+            for (let c = 0; c < Math.min(4, isz); c++) {
+              colors[i * 4 + c] = src[i * isz + c] * norm;
+            }
+          }
+        }
+        volume.verts.forEach((v, k) => {
+          const amt = lipTintAmount(v.tint, cfg);
+          if (amt <= 0) return;
+          const o = (preRimCount + k) * 4;
+          for (let c = 0; c < 3; c++) {
+            colors[o + c] += (cfg.lip_color[c] - colors[o + c]) * amt;
+          }
+        });
+        prim.attributes.COLOR_0 = patcher._addAccessorLike(colors, 'VEC4', 5126);
       }
     }
 

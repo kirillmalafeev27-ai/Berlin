@@ -1,5 +1,38 @@
 # facerig — jaw-open lip-sync rigs for AI-generated GLBs
 
+## v0.5 — scale-proof units, front-facing lip volume, lip tint
+
+Three fixes on top of the v0.4 volumetric mouth:
+
+1. **Scale normalization.** Models arrive in arbitrary units (Mixamo FBX
+   meshes are 1/100 scale). All mouth-surgery math now runs with the head
+   normalized to 1 unit and results scale back on export — any of the 16
+   characters behaves identically with zero manual tweaking. The stats line
+   shows the scale-independent opening percentage; `jawOpen` preview is
+   clamped to 0..1 (opening amount is `jaw strength`'s job); `lip_cut` and
+   `lip_rim` are ON by default (their being off was the real cause of the
+   "need jawOpen=2" symptom). The tongue is sized by the calibrated slit
+   width, rests inside the pocket, and carries its own `jawOpen` morph so it
+   rides the lower jaw (70% of the drop) in the tool, the preview page and
+   the game runtime alike.
+2. **Lips read head-on.** The v0.4 rim was extruded inward+backward, so from
+   the front the player looked straight down the extrusion axis at a flat
+   slit. The lip strip is now a **roll**: it arcs forward by `lip_bulge`,
+   separates the upper/lower lips by `lip_split`, wraps over a
+   `bevel_width`-radius outer arc (`bevel_segments` rings — the bevel is on
+   the visible outer edge now) and tucks into the skin. The pocket welds at
+   the slit line itself and at the roll ends (exact record reuse, crack test
+   still asserts zero divergence at any jawOpen).
+3. **Lip tint.** Roll vertices get `COLOR_0` vertex colors blending toward
+   `lip_color` (soft stylized pink) with a sin-dome band reshaped by
+   `lip_color_blend` — feathered into the skin, no hard mask edge, capped
+   below full saturation so it never reads as lipstick. Existing vertices
+   stay white (a no-op multiplier over the texture); works whether or not
+   the source mesh already had vertex colors.
+
+Known limitation (by design): stylized low-poly lip pads, not photoreal
+anatomy — there are still no anatomical edge loops around the mouth.
+
 ## v0.4 — volumetric mouth (no more paper-thin angular slit)
 
 The v0.3 slit inherited the low-poly angularity and had single-polygon edges.

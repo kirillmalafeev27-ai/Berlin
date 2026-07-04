@@ -13,7 +13,7 @@ import GUI from 'three/addons/libs/lil-gui.module.min.js';
 import {
   mergeCfg, mouthAnchor, jawDelta, puckerDelta,
   cavityAndTonguePlacement, boundsInBox, guessHeadBox, snapFrontOffsetFrac,
-  guessFrontOrientation, extendAttributeData, computeNormalsFor,
+  guessFrontOrientation, extendAttributeData, computeNormalsFor, lipTintAmount,
 } from './facerig-core.js';
 import { rigGLB, mouthSurgery } from './rig-pipeline.js';
 import { parseGLB } from './glb-io.js';
@@ -257,6 +257,24 @@ function rebuildWorkingGeometry() {
   g.morphAttributes.position = morphs;
   g.computeBoundingSphere();
 
+  // 9.3 lip tint (preview mirror of the exported COLOR_0)
+  if (s && s.volume) {
+    const total = g.attributes.position.count;
+    const base = new Float32Array(total * 3).fill(1);
+    if (g.attributes.color) {
+      const ca = g.attributes.color;
+      for (let i = 0; i < total; i++) {
+        for (let c = 0; c < 3; c++) base[i * 3 + c] = ca.getComponent(i, c);
+      }
+    }
+    state._lipColorBase = base;
+    g.setAttribute('color', new THREE.BufferAttribute(base.slice(), 3));
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mats.forEach((mt) => { mt.vertexColors = true; mt.needsUpdate = true; });
+  } else {
+    state._lipColorBase = null;
+  }
+
   if (mesh.geometry !== state.originalGeo) mesh.geometry.dispose();
   mesh.geometry = g;
   mesh.updateMorphTargets();
@@ -425,6 +443,7 @@ function recompute() {
   }
   jawAttr.needsUpdate = true;
   puckAttr.needsUpdate = true;
+  updateLipColors();
 
   // helper transforms
   const a = state.anchor;
@@ -443,6 +462,27 @@ function recompute() {
   state._tongueBase = [...place.tonCenter]; // tick() rides it with the jaw
 
   updateStatsOverlay();
+}
+
+// 9.3: re-mix the lip tint into the preview color attribute (cheap — no
+// geometry rebuild, so the color picker feels live)
+function updateLipColors() {
+  const s = state.surgery;
+  const mesh = state.mesh;
+  if (!mesh || !s || !s.volume || !state._lipColorBase) return;
+  const attr = mesh.geometry.attributes.color;
+  if (!attr) return;
+  attr.array.set(state._lipColorBase);
+  const cfg = state.cfg;
+  s.volume.verts.forEach((v, k) => {
+    const amt = lipTintAmount(v.tint, cfg);
+    if (amt <= 0) return;
+    const o = (s.preRimCount + k) * 3;
+    for (let c = 0; c < 3; c++) {
+      attr.array[o + c] += (cfg.lip_color[c] - attr.array[o + c]) * amt;
+    }
+  });
+  attr.needsUpdate = true;
 }
 
 // The bbox-front anchor sits at nose-tip depth; snap it back to the actual
@@ -490,7 +530,7 @@ function exportConfigObject() {
   const gltfMesh = state.meshIndex != null ? state.gltfJson.meshes[state.meshIndex] : null;
   return {
     tool: 'facerig-web',
-    version: '0.4',
+    version: '0.5',
     input: state.fileName,
     head_mesh: gltfMesh ? (gltfMesh.name ?? null) : (state.mesh?.name || null),
     head_mesh_index: state.meshIndex,
@@ -617,6 +657,8 @@ fJaw.add(state.cfg, 'bevel_segments', 1, 4, 1).name('roll segments').onChange(re
 fJaw.add(state.cfg, 'rim_depth', 0.02, 0.3, 0.005).name('pocket depth').onChange(recompute).listen();
 fJaw.add(state.cfg, 'rim_segments', 1, 4, 1).name('pocket segments').onChange(recompute).listen();
 fJaw.add(state.cfg, 'edge_smooth', 0, 8, 1).name('edge smooth').onChange(recompute).listen();
+fJaw.addColor(state.cfg, 'lip_color').name('lip color').onChange(updateLipColors).listen();
+fJaw.add(state.cfg, 'lip_color_blend', 0.2, 3, 0.05).name('lip color blend').onChange(updateLipColors).listen();
 fJaw.add(state.cfg, 'mouth_height_frac', 0, 1, 0.005).name('mouth height').onChange(recompute).listen();
 fJaw.add(state.cfg, 'mouth_region_frac', 0.02, 0.6, 0.005).name('region σ').onChange(recompute).listen();
 fJaw.add(state.cfg, 'jaw_strength_frac', 0, 0.5, 0.005).name('jaw strength').onChange(recompute).listen();
