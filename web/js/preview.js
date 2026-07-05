@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CharacterMouth } from './lipsync-runtime.js';
+import { GesturePlayer } from './gesture-player.js';
+import { registerSyntheticPool } from './synthetic-clips.js';
 import { idbGet } from './idb-store.js';
 
 const canvas = document.getElementById('viewport');
@@ -50,7 +52,8 @@ window.addEventListener('resize', resize);
 
 // ---------------------------------------------------------------------------
 const loader = new GLTFLoader();
-let mouth = null;
+let mouth = null;           // the MOUTH channel (morphs)
+let body = null;            // the BODY channel (skeletal Mixamo clips)
 let root = null;
 let bones = { head: null, neck: null, spine: null };
 let speaking = false;
@@ -58,9 +61,27 @@ let speaking = false;
 function setStatus(t) { document.getElementById('status').textContent = t; }
 function setSubtitle(t) { document.getElementById('subtitle').textContent = t; }
 
+// A body clip pool can be supplied as ?clips=idle:/url.glb,nod:/url.glb (real
+// Mixamo body GLBs). With none given we register procedurally-generated clips
+// that target the same mixamorig bone names — the two channels and the
+// crossfades behave identically either way.
+function clipPoolFromQuery() {
+  const raw = new URLSearchParams(location.search).get('clips');
+  if (!raw) return null;
+  const pool = {};
+  for (const part of raw.split(',')) {
+    const [name, ...rest] = part.split(':');
+    if (name && rest.length) pool[name.trim()] = rest.join(':').trim();
+  }
+  return Object.keys(pool).length ? pool : null;
+}
+
 async function loadModel(buf, name = 'model.glb') {
   const gltf = await new Promise((res, rej) => loader.parse(buf.slice(0), '', res, rej));
   if (root) scene.remove(root);
+  if (body) body.dispose();
+  bones = { head: null, neck: null, spine: null };
+  baseRot.clear();
   root = gltf.scene;
   root.traverse((o) => {
     if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
@@ -72,11 +93,29 @@ async function loadModel(buf, name = 'model.glb') {
   });
   scene.add(root);
 
+  // MOUTH channel
   mouth = new CharacterMouth(gltf, { strength: 1.5, smoothing: 0.3 });
   const rigged = mouth.targets.length > 0;
+
+  // BODY channel — independent of the mouth. Clips retarget by mixamorig bone
+  // name, so the same pool drives every character sharing the skeleton.
+  body = new GesturePlayer(gltf, { fade: 0.3 });
+  let bodyInfo = '';
+  if (body.hasSkeleton) {
+    const pool = clipPoolFromQuery();
+    try {
+      if (pool) await body.loadClips(pool);
+      else registerSyntheticPool(body);
+      body.playIdle('idle');
+      bodyInfo = ` · body: idle+${[...body.clips.keys()].filter((n) => n !== 'idle').join('/')}`;
+    } catch (e) { console.warn('clip pool', e); bodyInfo = ' · body: clip load failed'; }
+  } else {
+    body = null; // no skeleton → fall back to the procedural sway below
+  }
+
   document.getElementById('hint').style.display = 'none';
   setStatus(rigged
-    ? `${name}: rig OK (${mouth.targets.length} mesh, morphs: jawOpen${mouth.targets[0].pucker != null ? ' + mouthPucker' : ''})`
+    ? `${name}: rig OK (${mouth.targets.length} mesh, jawOpen${mouth.targets[0].pucker != null ? '+mouthPucker' : ''})${bodyInfo}`
     : `⚠ ${name} has no jawOpen morph — export a rigged GLB from the calibration tool`);
 
   frameCharacter();
@@ -95,8 +134,9 @@ function frameCharacter() {
   camera.updateProjectionMatrix();
 }
 
-// procedural idle so the character doesn't stand frozen (works with the
-// mixamo skeleton; harmless no-op for static models)
+// Fallback procedural sway — ONLY used when there's no skeleton for the
+// GesturePlayer to drive (static head-only exports). With a skeleton, the
+// mixer's idle clip owns the bones and this is skipped.
 const baseRot = new Map();
 function idle(t) {
   for (const [k, b] of Object.entries(bones)) {
@@ -160,6 +200,10 @@ async function speak() {
   speakBtn.disabled = true;
   setSubtitle(text);
   setStatus('…');
+  // BODY channel: loop a talk gesture over the idle base while the line plays.
+  // MOUTH channel: the audio drives jawOpen. Independent — either can be
+  // absent (static model still lip-syncs; unrigged clip still gestures).
+  if (body && body.clips.has('talk')) body.playGesture('talk', { loop: true, returnToIdle: true });
   try {
     await mouth.speakViaProxy(text, document.getElementById('voice').value.trim());
     setStatus('');
@@ -168,19 +212,35 @@ async function speak() {
   } finally {
     speaking = false;
     speakBtn.disabled = false;
+    if (body) body.returnToIdle();   // crossfade back to idle when the line ends
     setTimeout(() => setSubtitle(''), 1200);
   }
 }
 speakBtn.onclick = speak;
 sayInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') speak(); });
 
+// one-shot gesture buttons (independent of speaking)
+function doGesture(name) {
+  if (body && body.clips.has(name)) body.playGesture(name, { returnToIdle: true });
+}
+document.getElementById('gNod')?.addEventListener('click', () => doGesture('nod'));
+document.getElementById('gShrug')?.addEventListener('click', () => doGesture('shrug'));
+document.getElementById('gTurn')?.addEventListener('click', () => doGesture('turn'));
+
 // ---------------------------------------------------------------------------
+// Unified update loop: BOTH channels every frame, independently.
+//   body.update(dt) writes bone transforms (mixer)
+//   mouth.update()   writes morph influences (jawOpen / mouthPucker)
+// three.js applies morphs in local space then skinning, so they compose.
 const clock = new THREE.Clock();
+let elapsed = 0;
 function tick() {
   requestAnimationFrame(tick);
-  const t = clock.getElapsedTime();
+  const dt = Math.min(clock.getDelta(), 0.1);
+  elapsed += dt;
   if (mouth) mouth.update();
-  idle(t);
+  if (body) body.update(dt);
+  else idle(elapsed);         // procedural fallback only when there's no skeleton
   orbit.update();
   renderer.render(scene, camera);
 }
@@ -191,6 +251,8 @@ tick();
 window.__preview = {
   loadModel,
   get mouth() { return mouth; },
+  get body() { return body; },
   speak,
+  gesture: doGesture,
   isSpeaking: () => speaking,
 };

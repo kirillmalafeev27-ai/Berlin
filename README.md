@@ -1,5 +1,53 @@
 # facerig — jaw-open lip-sync rigs for AI-generated GLBs
 
+## v0.6 — body-animation channel (Mixamo clips + mouth morph)
+
+Two independent animation channels on one character:
+
+- **Body** = skeletal Mixamo clips (bones + keyframes, "without skin" export),
+  driven by an `AnimationMixer`.
+- **Mouth** = the `jawOpen` / `mouthPucker` morphs, driven by `CharacterMouth`
+  from audio amplitude.
+
+They compose automatically — three.js applies morphs in the mesh's local space
+and *then* skinning, so a nod clip and an open mouth run at the same time with
+no interaction. `web/js/gesture-player.js` (`GesturePlayer`) is the body side:
+
+```js
+const body = new GesturePlayer(gltf, { fade: 0.3 });
+await body.loadClips({ idle: '/clips/idle.glb', nod: '/clips/nod.glb', … });
+body.playIdle();                                   // base layer, loops
+body.playGesture('nod', { returnToIdle: true });   // crossfade in, then back
+// render loop, next to mouth.update():
+body.update(dt);
+```
+
+- **Lazy, shared clip pool.** Clip GLBs are fetched once and cached module-wide
+  (keyed by URL); the same `AnimationClip` retargets by `mixamorig:` bone name
+  to every one of the 16 characters — one download per clip, not per character.
+- **Layers + crossfades.** An idle clip loops underneath; gestures crossfade in
+  over `fade` seconds and a one-shot gesture crossfades back to idle on finish.
+- The game preview (`/preview.html`) uses it: idle on load, a looping *talk*
+  gesture while a line plays (then back to idle), and Nod / Shrug / Turn
+  buttons. A real clip pool can be supplied with
+  `?clips=idle:/idle.glb,nod:/nod.glb`; with none given, procedurally-generated
+  clips targeting the same `mixamorig:` bones stand in (this repo ships no
+  Mixamo GLBs — they need an Adobe login).
+
+**The hard invariant, tested directly.** The tool-generated mouth vertices
+(lip rolls, split, bevel, pocket) inherit skinning weights from the head/neck
+bones, so when a body clip turns the head the mouth rides with it. Verified two
+ways: a node test skins the export at a 30° head-turn pose and confirms the
+pocket verts track the head bone (a body vertex stays put) with the weld intact
+(0.0 gap); a browser test plays the *turn* clip with `jawOpen=1` and measures
+the mouth vert staying welded to its face twin and moving with the head bone.
+
+Shared-skeleton transfer is proven by one clip pool driving two different
+meshes on the same bone names. **Note:** only one Mixamo-rigged character
+(`ali_mixamo`) is in the repo, so the full 3-character matrix (Ali + policeman +
+woman) awaits those uploads — the retargeting *mechanism* is validated on two
+distinct meshes, but drop in the other rigged GLBs to confirm the art holds.
+
 ## v0.5 — scale-proof units, front-facing lip volume, lip tint
 
 Three fixes on top of the v0.4 volumetric mouth:
