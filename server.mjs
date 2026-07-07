@@ -43,6 +43,13 @@ function loadEnvFile(filePath) {
 loadEnvFile(path.join(root, '.env'));
 
 const port = Number(process.env.PORT || 5173);
+// Render (and most PaaS) route traffic to 0.0.0.0; binding to 127.0.0.1 makes
+// the service unreachable and fails the health check. Allow an override but
+// default to all interfaces so the container is reachable.
+const host = process.env.HOST || '0.0.0.0';
+// Static files may live at the repo root (index.html, src/, fantasy-town.glb)
+// or under public/ (Vite convention). Requests are resolved against both.
+const staticRoots = [root, path.join(root, 'public')];
 const DEFAULT_AI_TUNNEL_BASE_URL = 'https://api.aitunnel.ru/v1';
 const DEFAULT_AI_TUNNEL_MODEL = 'gpt-5.4-mini';
 const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
@@ -63,9 +70,28 @@ const mimeTypes = new Map([
   ['.jpeg', 'image/jpeg'],
 ]);
 
+// Stable URL prefix the game uses for character/animation GLBs. The real
+// files may sit at ./Mixamo/glb (legacy layout) or ./public/assets/mixamo/glb
+// (committed layout); we resolve whichever exists and alias both to this URL.
+const MIXAMO_URL_PREFIX = '/Mixamo/glb/';
+const MIXAMO_DIR_CANDIDATES = ['Mixamo/glb', 'public/assets/mixamo/glb'];
+
+function firstExistingDir(candidates) {
+  for (const relativeDir of candidates) {
+    const absoluteDir = path.resolve(root, relativeDir);
+
+    if (absoluteDir.startsWith(root) && existsSync(absoluteDir)) {
+      return relativeDir;
+    }
+  }
+
+  return candidates[0];
+}
+
+const mixamoDir = firstExistingDir(MIXAMO_DIR_CANDIDATES);
 const animationSearchDirs = ['', 'animations', 'mixamo', 'assets'];
-const riggedCharacterDirs = ['Mixamo'];
-const bodyAnimationDir = 'Mixamo/glb';
+const riggedCharacterDirs = [mixamoDir];
+const bodyAnimationDir = mixamoDir;
 const characterFile = 'Meshy_AI_Character_output.fbx';
 const bodyAnimationFiles = new Set([
   'Acknowledging.glb',
@@ -107,13 +133,41 @@ function assetUrl(relativePath) {
   return `/${relativePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')}`;
 }
 
-function resolveRequestPath(requestUrl) {
-  const url = new URL(requestUrl, `http://127.0.0.1:${port}`);
-  const cleanPath = decodeURIComponent(url.pathname);
-  const relativePath = cleanPath === '/' ? 'index.html' : cleanPath.slice(1);
-  const filePath = path.resolve(root, relativePath);
+// Character/animation GLBs are always exposed under the stable /Mixamo/glb/
+// prefix regardless of where the file physically lives.
+function mixamoAssetUrl(relativePath) {
+  const name = path.basename(relativePath);
+  return MIXAMO_URL_PREFIX + encodeURIComponent(name);
+}
 
-  if (!filePath.startsWith(root)) {
+// Resolve a URL path to an on-disk file, trying the repo root first and then
+// public/. Returns null if the path escapes every static root (traversal).
+function resolveStaticFile(pathname) {
+  const cleanPath = decodeURIComponent(pathname);
+  const relativePath = cleanPath === '/' ? 'index.html' : cleanPath.replace(/^\/+/, '');
+
+  for (const base of staticRoots) {
+    const filePath = path.resolve(base, relativePath);
+
+    if (!filePath.startsWith(base)) {
+      continue;
+    }
+
+    if (existsSync(filePath)) {
+      return filePath;
+    }
+  }
+
+  return null;
+}
+
+// Serve the stable /Mixamo/glb/<file> alias from whichever real directory exists.
+function resolveMixamoFile(pathname) {
+  const name = decodeURIComponent(pathname.slice(MIXAMO_URL_PREFIX.length));
+  const dir = path.resolve(root, mixamoDir);
+  const filePath = path.resolve(dir, name);
+
+  if (!filePath.startsWith(dir) || !existsSync(filePath)) {
     return null;
   }
 
@@ -223,8 +277,8 @@ async function sendAssetManifest(response) {
       character: fbxFiles.includes(characterFile) ? assetUrl(characterFile) : null,
       animations: animations.map(assetUrl),
       fbxFiles: fbxFiles.map(assetUrl),
-      characters: (await listRiggedCharacters()).map(assetUrl),
-      bodyAnimations: (await listBodyAnimationGlbs()).map(assetUrl),
+      characters: (await listRiggedCharacters()).map(mixamoAssetUrl),
+      bodyAnimations: (await listBodyAnimationGlbs()).map(mixamoAssetUrl),
     }),
   );
 }
@@ -577,11 +631,18 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  const filePath = resolveRequestPath(request.url || '/');
+  if (url.pathname === '/api/health') {
+    sendJson(response, 200, { status: 'ok' });
+    return;
+  }
+
+  const filePath = url.pathname.startsWith(MIXAMO_URL_PREFIX)
+    ? resolveMixamoFile(url.pathname)
+    : resolveStaticFile(url.pathname);
 
   if (!filePath) {
-    response.writeHead(403);
-    response.end('Forbidden');
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Not found');
     return;
   }
 
@@ -604,6 +665,6 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Berlin language nav game: http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`Berlin language nav game: http://${host}:${port}`);
 });

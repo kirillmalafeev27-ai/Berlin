@@ -82,6 +82,11 @@ const QUEST_POINTS = {
   well: new THREE.Vector3(34.2, 4.82, 115.5),
 };
 const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
+// Used only when the asset manifest reports no rigged characters (e.g. a fresh
+// deploy before the *.rigged.glb officer is committed) so the gate still has a
+// guard to talk to.
+const QUEST_GUARD_MODEL_FALLBACK_URL =
+  '/Mixamo/glb/Idle%20Meshy_AI_Police_Officer_in_T_P_0705154259_texture.glb';
 const QUEST_WALKABLE_RECTS = [
   { name: 'Quest_Walkable_Gate_Approach', x: 58.8, y: 4.82, z: 132.0, sx: 9, sz: 28 },
   { name: 'Quest_Walkable_Main_Street', x: 58.8, y: 4.82, z: 91.0, sx: 9, sz: 62 },
@@ -1368,6 +1373,72 @@ function placeNpcOnNavmesh(npc, index, total) {
   syncNpcTarget(npc);
 }
 
+const _groundBox = new THREE.Box3();
+const _groundVertex = new THREE.Vector3();
+
+// Lowest world-space Y across an object's meshes, honouring skeletal skinning.
+// THREE.Box3.setFromObject() reads the bind-pose geometry and ignores bone
+// transforms, so for an animated SkinnedMesh it returns the T-pose bounds. A
+// Mixamo idle then shifts the body up via its Hips track, which is exactly why
+// the character floats. We sample the actually-deformed vertices for skinned
+// meshes (falling back to the bounding box otherwise) so grounding matches what
+// the player sees on screen.
+function computeSkinnedMinWorldY(object) {
+  object.updateMatrixWorld(true);
+  let minY = Infinity;
+
+  object.traverse((child) => {
+    if (!child.isMesh) {
+      return;
+    }
+
+    if (
+      child.isSkinnedMesh &&
+      typeof child.getVertexPosition === 'function' &&
+      child.geometry?.attributes?.position
+    ) {
+      const count = child.geometry.attributes.position.count;
+
+      for (let i = 0; i < count; i += 1) {
+        child.getVertexPosition(i, _groundVertex);
+        _groundVertex.applyMatrix4(child.matrixWorld);
+
+        if (_groundVertex.y < minY) {
+          minY = _groundVertex.y;
+        }
+      }
+
+      return;
+    }
+
+    _groundBox.setFromObject(child);
+
+    if (!_groundBox.isEmpty() && _groundBox.min.y < minY) {
+      minY = _groundBox.min.y;
+    }
+  });
+
+  return minY;
+}
+
+// Measure the constant gap between the cheap rest-pose bounding box (evaluated
+// every frame) and the true skinned feet, so per-frame grounding stays O(1) yet
+// lands the animated model on the ground instead of floating. Recomputed at
+// spawn and whenever the active clip changes (see updateNpcs).
+function calibrateNpcGroundBias(npc) {
+  if (!npc?.visual) {
+    return;
+  }
+
+  npc.visual.updateMatrixWorld(true);
+  _groundBox.setFromObject(npc.visual);
+  const restMinY = _groundBox.min.y;
+  const skinnedMinY = computeSkinnedMinWorldY(npc.visual);
+
+  npc.groundBiasY =
+    Number.isFinite(restMinY) && Number.isFinite(skinnedMinY) ? skinnedMinY - restMinY : 0;
+}
+
 function fitNpcVisualToGround(npc) {
   if (!npc?.visual) {
     return;
@@ -1402,13 +1473,16 @@ function refitNpcToGround(npc) {
   }
 
   npc.visual.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(npc.visual);
+  _groundBox.setFromObject(npc.visual);
 
-  if (!Number.isFinite(box.min.y) || box.isEmpty()) {
+  if (!Number.isFinite(_groundBox.min.y) || _groundBox.isEmpty()) {
     return;
   }
 
-  const bottomOffset = box.min.y - npc.root.position.y;
+  // _groundBox is the rest-pose box; add the calibrated skin bias to recover the
+  // real animated feet without a per-frame vertex scan.
+  const skinnedBottom = _groundBox.min.y + (npc.groundBiasY || 0);
+  const bottomOffset = skinnedBottom - npc.root.position.y;
 
   if (Math.abs(bottomOffset) > 0.02) {
     npc.visual.position.y -= bottomOffset;
@@ -1453,6 +1527,13 @@ function playNpcAnimation(npc, animationName, options = {}) {
 
   action.fadeIn(options.fade ?? 0.2).play();
   npc.currentAction = action;
+
+  // A different clip may plant the feet at a different height relative to the
+  // rest pose, so re-measure the grounding bias on the next frame.
+  if (npc.currentAnimationName !== animationName) {
+    npc.groundBiasDirty = true;
+  }
+
   npc.currentAnimationName = animationName;
   return true;
 }
@@ -1606,6 +1687,8 @@ function createNpcFromGltf(gltf, url, index, total) {
     talkUntil: 0,
     marker: null,
     target: null,
+    groundBiasY: 0,
+    groundBiasDirty: false,
   };
 
   fitNpcVisualToGround(npc);
@@ -1623,6 +1706,10 @@ function createNpcFromGltf(gltf, url, index, total) {
   placeNpcOnNavmesh(npc, index, total);
   playNpcIdle(npc, { fade: 0 });
   npc.mixer.update(0);
+  // Measure the animated feet once the idle pose is applied so the model lands
+  // on the ground on its very first rendered frame instead of floating.
+  calibrateNpcGroundBias(npc);
+  npc.groundBiasDirty = false;
   refitNpcToGround(npc);
   return npc;
 }
@@ -1659,7 +1746,8 @@ async function loadNpcCharactersAndAnimations() {
     const guardUrl =
       characterUrls.find((url) => /police|officer|wach|guard/i.test(url)) ||
       characterUrls.find((url) => /berliner|sage|man/i.test(url)) ||
-      characterUrls[0];
+      characterUrls[0] ||
+      QUEST_GUARD_MODEL_FALLBACK_URL;
     characterUrls = guardUrl ? [guardUrl] : [];
   }
 
@@ -1849,6 +1937,12 @@ function updateNpcs(deltaTime) {
 
   for (const npc of npcs) {
     npc.mixer?.update(deltaTime);
+
+    if (npc.groundBiasDirty) {
+      calibrateNpcGroundBias(npc);
+      npc.groundBiasDirty = false;
+    }
+
     refitNpcToGround(npc);
     npc.mouth?.update(deltaTime);
 
@@ -1963,7 +2057,9 @@ function renderQuestChips(chips = []) {
 
 function questChipsForStage(stage = questState.stage) {
   if (stage === 'ask_name') {
+    const greeting = guardGreeting();
     return [
+      { label: `${greeting.de}! Ich bin ___`, template: `${greeting.de}! Ich bin ___` },
       { label: 'Ich bin ___', template: 'Ich bin ___' },
       { label: 'Wie bitte?', action: 'repeat' },
       { label: 'Hilfe', action: 'help' },
@@ -1997,6 +2093,14 @@ function hasCyrillic(text) {
   return /[А-Яа-яЁё]/.test(text);
 }
 
+// Strip a leading greeting ("Guten Morgen! ...", "Hallo, ...") so mirrored
+// greeting chips like "Guten Morgen! Ich bin ___" still parse the name.
+function stripLeadingGreeting(text) {
+  return text
+    .replace(/^\s*(?:guten\s+(?:morgen|tag|abend)|hallo|hi|hey|servus|moin)\s*[!.,:-]*\s*/i, '')
+    .trim();
+}
+
 function parseQuestName(input) {
   const text = String(input || '').trim().replace(/\s+/g, ' ');
 
@@ -2004,13 +2108,19 @@ function parseQuestName(input) {
     return null;
   }
 
-  const exact = text.match(/^(?:ich\s+(?:bin|hei(?:ss|ß)e)|mein\s+name\s+ist)\s+([\p{L}-]{2,20})$/iu);
+  const cleaned = stripLeadingGreeting(text);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const exact = cleaned.match(/^(?:ich\s+(?:bin|hei(?:ss|ß)e)|mein\s+name\s+ist)\s+([\p{L}-]{2,20})$/iu);
 
   if (exact) {
     return { value: capitalizeQuestValue(exact[1]), exact: true };
   }
 
-  const singleWord = text.match(/^([\p{L}-]{2,20})$/u);
+  const singleWord = cleaned.match(/^([\p{L}-]{2,20})$/u);
 
   if (singleWord && !/^(ich|bin|du|bist|wer|woher|hallo|danke|ja|nein)$/i.test(singleWord[1])) {
     return { value: capitalizeQuestValue(singleWord[1]), exact: false };
@@ -2074,6 +2184,13 @@ function openQuestDialogue(npc = getQuestGuard()) {
   }
 
   setSelectedNpc(npc, { focusInput: true });
+  // Stop the player the instant the conversation starts so they can't keep
+  // walking through the gate while talking to Bruno.
+  agent.path = [];
+  agent.pathIndex = 0;
+  agent.pendingAction = null;
+  agent.pendingNpcAction = null;
+  agent.pendingArrivalPoint = null;
   npc.path = [];
   npc.pathIndex = 0;
   npc.state = 'talking';
@@ -2081,7 +2198,11 @@ function openQuestDialogue(npc = getQuestGuard()) {
   questState.attempts = 0;
   setQuestStatus('Квест: Der Wachmann - назовите себя');
   renderQuestChips(questChipsForStage());
-  speakQuestLine(npc, 'Hallo. Wer bist du?', 'Привет. Кто ты?', { intent: 'greeting' });
+
+  const greeting = guardGreeting();
+  speakQuestLine(npc, `${greeting.de}. Wer bist du?`, `${greeting.ru}. Кто ты?`, {
+    intent: 'greeting',
+  });
 }
 
 function repeatQuestPrompt() {
@@ -2235,6 +2356,64 @@ async function sendQuestDialogueToGuard(npc, message) {
   }
 }
 
+// The player is "held" from the moment Bruno halts them until the quest is
+// finished. While held they cannot walk away or slip past the gate.
+function isPlayerHeldByGuard() {
+  return QUEST_ENABLED && questState.halted && !questState.completed;
+}
+
+const GUARD_GREETINGS = {
+  morning: { de: 'Guten Morgen', ru: 'Доброе утро' },
+  day: { de: 'Guten Tag', ru: 'Добрый день' },
+  evening: { de: 'Guten Abend', ru: 'Добрый вечер' },
+};
+
+// Day cycle stand-in: derive the phase from the local clock so Bruno greets the
+// player differently through the day (A1.1 §1.1).
+function getDayPhase(date = new Date()) {
+  const hour = date.getHours();
+
+  if (hour >= 5 && hour < 11) {
+    return 'morning';
+  }
+
+  if (hour >= 11 && hour < 18) {
+    return 'day';
+  }
+
+  return 'evening';
+}
+
+function guardGreeting() {
+  return GUARD_GREETINGS[getDayPhase()] || GUARD_GREETINGS.day;
+}
+
+// A point a couple of metres in front of the guard, inside dialogue range.
+function guardDialogueApproachPoint(npc) {
+  const forward = new THREE.Vector3(
+    Math.sin(npc.root.rotation.y),
+    0,
+    Math.cos(npc.root.rotation.y),
+  );
+  const point = npc.root.position.clone().addScaledVector(forward, 2.6);
+  return snapToNpcGround(point);
+}
+
+// Pull the player the last couple of metres to Bruno and cancel any walk in
+// progress, so the dialogue reliably opens and they cannot wander off.
+function holdPlayerAtGuard(npc) {
+  if (!npc) {
+    return;
+  }
+
+  agent.path = [];
+  agent.pathIndex = 0;
+  agent.pendingAction = null;
+  agent.pendingNpcAction = null;
+  agent.pendingArrivalPoint = null;
+  moveToPoint(guardDialogueApproachPoint(npc));
+}
+
 function updateQuest() {
   const npc = getQuestGuard();
 
@@ -2253,11 +2432,20 @@ function updateQuest() {
 
   if (!questState.halted && distance <= QUEST_TRIGGER_HALT) {
     questState.halted = true;
+    faceNpcToAgent(npc, 1);
     speakQuestLine(npc, 'Halt!', 'Стой!', { intent: 'negative' });
+    holdPlayerAtGuard(npc);
   }
 
-  if (questState.stage === 'approach' && distance <= QUEST_TRIGGER_DIALOGUE) {
-    openQuestDialogue(npc);
+  if (questState.stage === 'approach') {
+    // Open at talking range, or as soon as a halted player has come to a stop
+    // (pull finished, or no navmesh path existed) so they can never soft-lock
+    // just out of range.
+    const stopped = agent.path.length === 0;
+
+    if (distance <= QUEST_TRIGGER_DIALOGUE || (questState.halted && stopped)) {
+      openQuestDialogue(npc);
+    }
   }
 }
 
@@ -3205,6 +3393,11 @@ function executeCommand(input) {
     return;
   }
 
+  if (isPlayerHeldByGuard()) {
+    setStatus('Bruno hält Sie auf. Antworten Sie ihm zuerst.', 'ready');
+    return;
+  }
+
   const command = registry.parseCommand(input);
   const animationCommand = findAnimationCommand(input);
   const mentionedNpc = findNpcInText(input);
@@ -3291,6 +3484,10 @@ function updateAgent(deltaTime) {
 
 function updateFlight(deltaTime) {
   if (!isFlyMode) {
+    return;
+  }
+
+  if (isPlayerHeldByGuard()) {
     return;
   }
 
@@ -3438,6 +3635,11 @@ function handleCanvasClick(event) {
   }
 
   if (isFlyMode) {
+    return;
+  }
+
+  if (isPlayerHeldByGuard()) {
+    setStatus('Bruno hält Sie auf. Antworten Sie ihm zuerst.', 'ready');
     return;
   }
 

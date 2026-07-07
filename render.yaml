@@ -1,0 +1,28 @@
+# Render blueprint for the Berlin language-navigation game.
+#
+# On https://dashboard.render.com: New -> Blueprint -> point at this repo,
+# or make sure the existing web service uses:
+#   Build Command:  npm install
+#   Start Command:  node server.mjs
+#   Root Directory: (repo root, leave blank)
+#
+# The server binds 0.0.0.0 and honours the PORT env var that Render injects.
+# Optional API keys enable NPC dialogue (AI_TUNNEL_API_KEY) and TTS
+# (ELEVENLABS_API_KEY); the game runs without them using local fallbacks.
+services:
+  - type: web
+    name: berlin-game
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.mjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: AI_TUNNEL_API_KEY
+        sync: false
+      - key: AI_TUNNEL_MODEL
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false

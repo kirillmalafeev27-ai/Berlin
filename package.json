@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server.js",
-    "serve": "node server.js",
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "serve": "node server.mjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
   },
