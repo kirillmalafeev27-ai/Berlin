@@ -40,9 +40,10 @@ const dialogueForm = document.querySelector('#dialogue-form');
 const dialogueInput = document.querySelector('#dialogue-input');
 const dialogueSubmit = document.querySelector('#dialogue-submit');
 const interactNpcButton = document.querySelector('#interact-npc');
+const micButton = document.querySelector('#mic-button');
 
 if (dialogueInput) {
-  dialogueInput.placeholder = 'Напишите немецкую фразу';
+  dialogueInput.placeholder = 'Напишите или скажите 🎤 немецкую фразу';
 }
 
 const NAV_KIND_STORAGE_KEY = 'berlin-game.nav-kinds.v1';
@@ -2108,7 +2109,7 @@ function parseQuestName(input) {
     return null;
   }
 
-  const cleaned = stripLeadingGreeting(text);
+  const cleaned = stripLeadingGreeting(text).replace(/[.,!?;:]+$/, '').trim();
 
   if (!cleaned) {
     return null;
@@ -2130,7 +2131,10 @@ function parseQuestName(input) {
 }
 
 function parseQuestOrigin(input) {
-  const text = String(input || '').trim().replace(/\s+/g, ' ');
+  const text = String(input || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.,!?;:]+$/, '');
 
   if (!text || hasCyrillic(text)) {
     return null;
@@ -2727,6 +2731,138 @@ function submitDialogueLine() {
   }
 
   sendDialogueToNpc(npc, dialogueInput.value);
+}
+
+// --- Voice input (speech-to-text) ---------------------------------------
+// Lets the player speak their German answer. The recognised text lands in the
+// dialogue line and is submitted through the normal pipeline, so the guard FSM
+// (or the AI for other NPCs) evaluates it and either advances or asks to repeat.
+const SpeechRecognitionImpl =
+  typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+
+const speechDictation = {
+  supported: Boolean(SpeechRecognitionImpl),
+  recognition: null,
+  listening: false,
+  finalTranscript: '',
+};
+
+function updateMicButton() {
+  if (!micButton) {
+    return;
+  }
+
+  if (!speechDictation.supported) {
+    micButton.disabled = true;
+    micButton.classList.remove('listening');
+    micButton.title = 'Голосовой ввод не поддерживается в этом браузере (нужен Chrome/Edge)';
+    return;
+  }
+
+  micButton.classList.toggle('listening', speechDictation.listening);
+  micButton.title = speechDictation.listening
+    ? 'Идёт запись — нажмите, чтобы остановить'
+    : 'Ответить голосом (немецкий)';
+}
+
+function stopDictation() {
+  if (speechDictation.recognition && speechDictation.listening) {
+    try {
+      speechDictation.recognition.stop();
+    } catch (error) {
+      /* ignore */
+    }
+  }
+}
+
+function startDictation() {
+  if (!speechDictation.supported) {
+    setStatus('Голосовой ввод недоступен: откройте игру в Chrome или Edge', 'error');
+    return;
+  }
+
+  if (speechDictation.listening) {
+    stopDictation();
+    return;
+  }
+
+  // The click is a user gesture, so this is a good moment to unlock NPC audio.
+  requestGameAudioUnlock();
+
+  const recognition = new SpeechRecognitionImpl();
+  recognition.lang = 'de-DE';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.maxAlternatives = 1;
+
+  speechDictation.recognition = recognition;
+  speechDictation.finalTranscript = '';
+
+  recognition.onstart = () => {
+    speechDictation.listening = true;
+    updateMicButton();
+    setStatus('🎤 Говорите по-немецки…', 'ready');
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '';
+
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const transcript = event.results[i][0].transcript;
+
+      if (event.results[i].isFinal) {
+        speechDictation.finalTranscript += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+
+    if (dialogueInput) {
+      dialogueInput.value = `${speechDictation.finalTranscript}${interim}`.trim();
+    }
+  };
+
+  recognition.onerror = (event) => {
+    speechDictation.listening = false;
+    updateMicButton();
+
+    const messages = {
+      'not-allowed': 'Доступ к микрофону запрещён. Разрешите его в настройках браузера.',
+      'service-not-allowed': 'Доступ к микрофону запрещён. Разрешите его в настройках браузера.',
+      'no-speech': 'Не расслышал. Нажмите 🎤 и повторите.',
+      'audio-capture': 'Микрофон не найден. Проверьте устройство.',
+      network: 'Нет сети для распознавания речи.',
+      aborted: '',
+    };
+
+    const message = event.error in messages ? messages[event.error] : `Ошибка распознавания: ${event.error}`;
+
+    if (message) {
+      setStatus(message, 'error');
+    }
+  };
+
+  recognition.onend = () => {
+    speechDictation.listening = false;
+    speechDictation.recognition = null;
+    updateMicButton();
+
+    const text = speechDictation.finalTranscript.trim();
+
+    if (text && dialogueInput) {
+      dialogueInput.value = text;
+      submitDialogueLine();
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch (error) {
+    speechDictation.listening = false;
+    speechDictation.recognition = null;
+    updateMicButton();
+    setStatus('Не удалось запустить микрофон. Попробуйте ещё раз.', 'error');
+  }
 }
 
 function exportCustomTargets() {
@@ -3691,6 +3827,11 @@ function setupInputEvents() {
     requestGameAudioUnlock({ showStatus: true });
     interactWithNearestNpc();
   });
+
+  if (micButton) {
+    micButton.addEventListener('click', startDictation);
+    updateMicButton();
+  }
 
   rebuildNavmeshButton.addEventListener('click', rebuildNavigation);
 
