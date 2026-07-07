@@ -1,0 +1,609 @@
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.dirname(fileURLToPath(import.meta.url));
+
+function loadEnvFile(filePath) {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  const text = readFileSync(filePath, 'utf8');
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    const equalsIndex = line.indexOf('=');
+
+    if (equalsIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, equalsIndex).trim();
+    let value = line.slice(equalsIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.join(root, '.env'));
+
+const port = Number(process.env.PORT || 5173);
+const DEFAULT_AI_TUNNEL_BASE_URL = 'https://api.aitunnel.ru/v1';
+const DEFAULT_AI_TUNNEL_MODEL = 'gpt-5.4-mini';
+const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
+const DEFAULT_ELEVENLABS_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
+
+const mimeTypes = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'application/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.glb', 'model/gltf-binary'],
+  ['.gltf', 'model/gltf+json'],
+  ['.fbx', 'application/octet-stream'],
+  ['.wasm', 'application/wasm'],
+  ['.webp', 'image/webp'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+]);
+
+const animationSearchDirs = ['', 'animations', 'mixamo', 'assets'];
+const riggedCharacterDirs = ['Mixamo'];
+const bodyAnimationDir = 'Mixamo/glb';
+const characterFile = 'Meshy_AI_Character_output.fbx';
+const bodyAnimationFiles = new Set([
+  'Acknowledging.glb',
+  'Agreeing.glb',
+  'Annoyed Head Shake.glb',
+  'Bored.glb',
+  'Disappointed.glb',
+  'Dismissing Gesture.glb',
+  'Happy Hand Gesture.glb',
+  'Happy Idle.glb',
+  'Head Nod Yes.glb',
+  'Idle Default beliner.glb',
+  'Laughing.glb',
+  'Look Around.glb',
+  'Looking.glb',
+  'Nervously Look Around.glb',
+  'Pointing Forward.glb',
+  'Pouting.glb',
+  'Quick Formal Bow.glb',
+  'Relieved Sigh.glb',
+  'Sad Idle.glb',
+  'Shaking Head No.glb',
+  'Shrugging.glb',
+  'Standing Arguing.glb',
+  'Standing Greeting.glb',
+  'Standing Idle.glb',
+  'Surprised.glb',
+  'Talking At Watercooler.glb',
+  'Telling A Secret.glb',
+  'Thankful.glb',
+  'Thinking.glb',
+  'Walking.glb',
+  'Waving.glb',
+  'Yawn.glb',
+  'Yelling While Standing.glb',
+]);
+
+function assetUrl(relativePath) {
+  return `/${relativePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function resolveRequestPath(requestUrl) {
+  const url = new URL(requestUrl, `http://127.0.0.1:${port}`);
+  const cleanPath = decodeURIComponent(url.pathname);
+  const relativePath = cleanPath === '/' ? 'index.html' : cleanPath.slice(1);
+  const filePath = path.resolve(root, relativePath);
+
+  if (!filePath.startsWith(root)) {
+    return null;
+  }
+
+  return filePath;
+}
+
+async function listFbxFiles(relativeDir = '') {
+  const dir = path.resolve(root, relativeDir);
+
+  if (!dir.startsWith(root)) {
+    return [];
+  }
+
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = [];
+
+    for (const entry of entries) {
+      const relativePath = path.join(relativeDir, entry.name);
+
+      if (entry.isDirectory()) {
+        files.push(...(await listFbxFiles(relativePath)));
+      } else if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.fbx') {
+        files.push(relativePath.replace(/\\/g, '/'));
+      }
+    }
+
+    return files;
+  } catch (error) {
+    return [];
+  }
+}
+
+async function listMatchingFiles(relativeDir, predicate) {
+  const dir = path.resolve(root, relativeDir);
+
+  if (!dir.startsWith(root)) {
+    return [];
+  }
+
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = [];
+
+    for (const entry of entries) {
+      const relativePath = path.join(relativeDir, entry.name);
+
+      if (entry.isDirectory()) {
+        files.push(...(await listMatchingFiles(relativePath, predicate)));
+      } else if (entry.isFile() && predicate(entry.name, relativePath)) {
+        files.push(relativePath.replace(/\\/g, '/'));
+      }
+    }
+
+    return files;
+  } catch (error) {
+    return [];
+  }
+}
+
+async function listRiggedCharacters() {
+  const files = [];
+
+  for (const dir of riggedCharacterDirs) {
+    files.push(
+      ...(await listMatchingFiles(
+        dir,
+        (name, relativePath) =>
+          name.toLowerCase().endsWith('.rigged.glb') &&
+          !relativePath.toLowerCase().includes('/node_modules/'),
+      )),
+    );
+  }
+
+  return files.sort((a, b) => a.localeCompare(b, 'en'));
+}
+
+async function listBodyAnimationGlbs() {
+  const files = await listMatchingFiles(
+    bodyAnimationDir,
+    (name, relativePath) =>
+      bodyAnimationFiles.has(name) &&
+      !relativePath.toLowerCase().includes('/normalized/'),
+  );
+
+  return files.sort((a, b) => a.localeCompare(b, 'en'));
+}
+
+async function sendAssetManifest(response) {
+  const files = new Set();
+
+  for (const dir of animationSearchDirs) {
+    for (const file of await listFbxFiles(dir)) {
+      files.add(file);
+    }
+  }
+
+  const fbxFiles = [...files].sort((a, b) => a.localeCompare(b, 'en'));
+  const animations = fbxFiles.filter((file) => path.basename(file) !== characterFile);
+
+  response.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  response.end(
+    JSON.stringify({
+      character: fbxFiles.includes(characterFile) ? assetUrl(characterFile) : null,
+      animations: animations.map(assetUrl),
+      fbxFiles: fbxFiles.map(assetUrl),
+      characters: (await listRiggedCharacters()).map(assetUrl),
+      bodyAnimations: (await listBodyAnimationGlbs()).map(assetUrl),
+    }),
+  );
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      raw += chunk;
+
+      if (raw.length > 1024 * 1024) {
+        reject(new Error('Request body is too large'));
+        request.destroy();
+      }
+    });
+    request.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (error) {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    request.on('error', reject);
+  });
+}
+
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function normalizedText(value) {
+  return String(value || '').toLowerCase();
+}
+
+function detectLanguage(message) {
+  if (/[\u0400-\u04ff]/.test(message)) {
+    return 'ru';
+  }
+
+  if (/\b(ich|du|sie|hallo|guten|danke|bitte|wo|wie|gehen|komm|stadt)\b/i.test(message)) {
+    return 'de';
+  }
+
+  return 'en';
+}
+
+function detectIntent(message) {
+  const text = normalizedText(message);
+
+  if (/\b(hi|hello|hey|hallo|guten|privet)\b/.test(text) || /[\u043f][\u0440][\u0438][\u0432][\u0435][\u0442]/i.test(text)) {
+    return 'greeting';
+  }
+
+  if (/[?]/.test(text) || /\b(where|what|why|how|wo|was|warum|wie|gde|kak)\b/.test(text)) {
+    return 'thinking';
+  }
+
+  if (/\b(thanks|thank|danke|spasibo)\b/.test(text) || /[\u0441][\u043f][\u0430][\u0441][\u0438][\u0431][\u043e]/i.test(text)) {
+    return 'thankful';
+  }
+
+  if (/\b(no|not|nein|nicht|stop|danger|angry|bad|net|nelzya)\b/.test(text)) {
+    return 'negative';
+  }
+
+  if (/\b(fun|joke|laugh|smile|happy|witz)\b/.test(text)) {
+    return 'happy';
+  }
+
+  if (/\b(help|hilf|hilfe|pomogi|work|job|arbeit)\b/.test(text)) {
+    return 'helpful';
+  }
+
+  return 'talk';
+}
+
+function animationKeywordsForIntent(intent) {
+  const map = {
+    greeting: ['standing greeting', 'waving', 'acknowledging'],
+    thinking: ['thinking', 'look around', 'looking'],
+    thankful: ['thankful', 'quick formal bow', 'acknowledging'],
+    negative: ['shaking head no', 'dismissing gesture', 'annoyed head shake'],
+    happy: ['laughing', 'happy hand gesture', 'happy idle'],
+    helpful: ['pointing forward', 'acknowledging', 'talking at watercooler'],
+    talk: ['talking at watercooler', 'telling a secret', 'acknowledging'],
+  };
+
+  return map[intent] || map.talk;
+}
+
+function localReplyFor({ npc, message }) {
+  const name = npc?.label || 'NPC';
+  const language = detectLanguage(message);
+  const intent = detectIntent(message);
+
+  const replies = {
+    ru: {
+      greeting: `\u041f\u0440\u0438\u0432\u0435\u0442. \u042f \u0440\u044f\u0434\u043e\u043c, \u0435\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u0431\u044b\u0441\u0442\u0440\u043e \u0441\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0432 \u0433\u043e\u0440\u043e\u0434\u0435.`,
+      thinking: `\u0414\u0430\u0439 \u043f\u043e\u0434\u0443\u043c\u0430\u0442\u044c. \u041f\u043e\u0445\u043e\u0436\u0435, \u043b\u0443\u0447\u0448\u0435 \u0438\u0434\u0442\u0438 \u043f\u043e \u0442\u0440\u043e\u0442\u0443\u0430\u0440\u0443 \u0438 \u0434\u0435\u0440\u0436\u0430\u0442\u044c\u0441\u044f \u0431\u043b\u0438\u0436\u0435 \u043a \u043e\u0442\u043a\u0440\u044b\u0442\u044b\u043c \u043c\u0435\u0441\u0442\u0430\u043c.`,
+      thankful: `\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430. \u0415\u0441\u043b\u0438 \u0447\u0442\u043e, \u043c\u043e\u0436\u0435\u0448\u044c \u043e\u0431\u0440\u0430\u0442\u0438\u0442\u044c\u0441\u044f \u0441\u043d\u043e\u0432\u0430.`,
+      negative: `\u041d\u0435\u0442, \u044f \u0431\u044b \u0442\u0430\u043a \u043d\u0435 \u0434\u0435\u043b\u0430\u043b. \u041b\u0443\u0447\u0448\u0435 \u0432\u044b\u0431\u0440\u0430\u0442\u044c \u0441\u043f\u043e\u043a\u043e\u0439\u043d\u044b\u0439 \u043c\u0430\u0440\u0448\u0440\u0443\u0442.`,
+      happy: `\u0425\u0430, \u0445\u043e\u0440\u043e\u0448\u043e \u0441\u043a\u0430\u0437\u0430\u043d\u043e. \u0413\u043e\u0440\u043e\u0434 \u0441\u0440\u0430\u0437\u0443 \u043a\u0430\u0436\u0435\u0442\u0441\u044f \u0442\u0435\u043f\u043b\u0435\u0435.`,
+      helpful: `\u041c\u043e\u0433\u0443 \u043f\u043e\u043c\u043e\u0447\u044c. \u0421\u043f\u0440\u043e\u0441\u0438 \u043a\u043e\u0440\u043e\u0442\u043a\u043e, \u0438 \u044f \u043f\u043e\u043a\u0430\u0436\u0443 \u043d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435.`,
+      talk: `\u0421\u043b\u044b\u0448\u0443 \u0442\u0435\u0431\u044f. \u0414\u0430\u0432\u0430\u0439 \u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c \u043f\u0440\u043e\u0449\u0435 \u0438 \u043f\u043e \u0434\u0435\u043b\u0443.`,
+    },
+    de: {
+      greeting: `Hallo. Ich bleibe in der Naehe, falls du eine schnelle Orientierung brauchst.`,
+      thinking: `Einen Moment. Am besten bleibst du auf dem Gehweg und gehst Richtung offener Platz.`,
+      thankful: `Gern. Sprich mich wieder an, wenn du noch etwas brauchst.`,
+      negative: `Nein, das wuerde ich nicht machen. Nimm lieber den ruhigeren Weg.`,
+      happy: `Ha, das ist gut. So klingt die Stadt gleich freundlicher.`,
+      helpful: `Ich helfe dir. Frag kurz, und ich zeige dir die Richtung.`,
+      talk: `Ich hoere dir zu. Sag mir kurz, was du wissen willst.`,
+    },
+    en: {
+      greeting: `Hello. I am nearby if you need quick city guidance.`,
+      thinking: `Let me think. The calm route is usually along the open sidewalk.`,
+      thankful: `You are welcome. Talk to me again if you need anything else.`,
+      negative: `No, I would not do that. Choose the quieter route instead.`,
+      happy: `That is a good one. The city feels warmer already.`,
+      helpful: `I can help. Ask briefly, and I will point you in the right direction.`,
+      talk: `I hear you. Tell me what you want to know.`,
+    },
+  };
+
+  return {
+    reply: replies[language][intent] || replies.en.talk,
+    animationIntent: intent,
+    animationKeywords: animationKeywordsForIntent(intent),
+    source: 'local',
+  };
+}
+
+function normalizeDialoguePayload(payload, fallback) {
+  const intent = payload?.animationIntent || fallback?.animationIntent || 'talk';
+  const keywords = Array.isArray(payload?.animationKeywords) && payload.animationKeywords.length
+    ? payload.animationKeywords
+    : animationKeywordsForIntent(intent);
+
+  return {
+    reply: String(payload?.reply || fallback?.reply || ''),
+    animationIntent: intent,
+    animationKeywords: keywords.map(String),
+    source: payload?.source || fallback?.source || 'local',
+  };
+}
+
+function stripUndefined(value) {
+  if (Array.isArray(value)) {
+    return value.map(stripUndefined);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined && entryValue !== null && entryValue !== '')
+      .map(([key, entryValue]) => [key, stripUndefined(entryValue)]),
+  );
+}
+
+async function callRemoteDialogue(input, fallback) {
+  const baseUrl =
+    process.env.AI_TUNNEL_BASE_URL ||
+    process.env.AI_BASE_URL ||
+    process.env.OPENAI_BASE_URL ||
+    DEFAULT_AI_TUNNEL_BASE_URL;
+  const apiKey =
+    process.env.AI_TUNNEL_API_KEY ||
+    process.env.AI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    '';
+  const model =
+    process.env.AI_TUNNEL_MODEL ||
+    process.env.AI_MODEL ||
+    process.env.OPENAI_MODEL ||
+    DEFAULT_AI_TUNNEL_MODEL;
+
+  if (!baseUrl || !apiKey) {
+    return null;
+  }
+
+  const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const system = [
+    'You are the dialogue engine for a playable 3D city prototype.',
+    'Do not advance or invent story. Stay generic, diegetic, and concise.',
+    'Answer in the same language as the player when possible.',
+    'Return only JSON with fields: reply, animationIntent, animationKeywords.',
+    'Do not prefix the reply with the NPC name.',
+    'animationKeywords must be 1-3 existing-style Mixamo animation hints like thinking, waving, thankful, talking at watercooler, shaking head no, standing greeting, laughing, pointing forward.',
+  ].join(' ');
+
+  const remoteResponse = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(stripUndefined({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            npc: input.npc || {},
+            message: input.message || '',
+            recentHistory: input.history || [],
+          }),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    })),
+  });
+
+  if (!remoteResponse.ok) {
+    throw new Error(`AI engine ${remoteResponse.status}: ${await remoteResponse.text()}`);
+  }
+
+  const data = await remoteResponse.json();
+  const content = data?.choices?.[0]?.message?.content || '';
+  const match = content.match(/\{[\s\S]*\}/);
+
+  if (!match) {
+    throw new Error('AI engine did not return JSON');
+  }
+
+  return normalizeDialoguePayload({ ...JSON.parse(match[0]), source: 'remote' }, fallback);
+}
+
+async function handleDialogue(request, response) {
+  try {
+    const input = await readJsonBody(request);
+    const fallback = localReplyFor(input);
+    const remote = await callRemoteDialogue(input, fallback).catch((error) => {
+      console.warn(error.message);
+      return null;
+    });
+
+    sendJson(response, 200, normalizeDialoguePayload(remote || fallback, fallback));
+  } catch (error) {
+    sendJson(response, 400, { error: error.message || 'Dialogue failed' });
+  }
+}
+
+function getElevenLabsConfig() {
+  return {
+    apiKey: process.env.ELEVENLABS_API_KEY || '',
+    voiceId: process.env.ELEVENLABS_VOICE_ID || DEFAULT_ELEVENLABS_VOICE_ID,
+    modelId: process.env.ELEVENLABS_MODEL_ID || DEFAULT_ELEVENLABS_MODEL_ID,
+    outputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_44100_128',
+  };
+}
+
+function cleanTextForSpeech(text) {
+  return String(text || '')
+    .replace(/^[^:]{1,32}:\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function handleTts(request, response) {
+  try {
+    const input = await readJsonBody(request);
+    const text = cleanTextForSpeech(input.text);
+    const config = getElevenLabsConfig();
+    const voiceId = input.voice_id || config.voiceId;
+
+    if (!text) {
+      sendJson(response, 400, { error: 'TTS text is empty' });
+      return;
+    }
+
+    if (!config.apiKey) {
+      sendJson(response, 503, {
+        error: 'ELEVENLABS_API_KEY is not configured on the server',
+      });
+      return;
+    }
+
+    const endpoint = new URL(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps`,
+    );
+    endpoint.searchParams.set('output_format', config.outputFormat);
+
+    const ttsResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': config.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(stripUndefined({
+        text,
+        model_id: input.model_id || config.modelId,
+        voice_settings: {
+          stability: Number(process.env.ELEVENLABS_STABILITY || 0.45),
+          similarity_boost: Number(process.env.ELEVENLABS_SIMILARITY_BOOST || 0.75),
+          style: Number(process.env.ELEVENLABS_STYLE || 0),
+          use_speaker_boost: process.env.ELEVENLABS_SPEAKER_BOOST !== 'false',
+        },
+      })),
+    });
+
+    if (!ttsResponse.ok) {
+      sendJson(response, ttsResponse.status, {
+        error: `ElevenLabs ${ttsResponse.status}: ${await ttsResponse.text()}`,
+      });
+      return;
+    }
+
+    const data = await ttsResponse.json();
+
+    sendJson(response, 200, {
+      audio_base64: data.audio_base64,
+      alignment: data.normalized_alignment || data.alignment || null,
+      raw_alignment: data.alignment || null,
+      voice_id: voiceId,
+      model_id: input.model_id || config.modelId,
+      output_format: config.outputFormat,
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: error.message || 'TTS failed' });
+  }
+}
+
+const server = createServer(async (request, response) => {
+  const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
+
+  if (url.pathname === '/api/assets') {
+    await sendAssetManifest(response);
+    return;
+  }
+
+  if (url.pathname === '/api/dialogue' && request.method === 'POST') {
+    await handleDialogue(request, response);
+    return;
+  }
+
+  if (url.pathname === '/api/tts' && request.method === 'POST') {
+    await handleTts(request, response);
+    return;
+  }
+
+  const filePath = resolveRequestPath(request.url || '/');
+
+  if (!filePath) {
+    response.writeHead(403);
+    response.end('Forbidden');
+    return;
+  }
+
+  try {
+    const fileStat = await stat(filePath);
+    const finalPath = fileStat.isDirectory()
+      ? path.join(filePath, 'index.html')
+      : filePath;
+    const extension = path.extname(finalPath).toLowerCase();
+
+    response.writeHead(200, {
+      'Content-Type': mimeTypes.get(extension) || 'application/octet-stream',
+      'Cache-Control': extension === '.glb' ? 'public, max-age=3600' : 'no-cache',
+    });
+
+    createReadStream(finalPath).pipe(response);
+  } catch (error) {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Not found');
+  }
+});
+
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Berlin language nav game: http://127.0.0.1:${port}`);
+});

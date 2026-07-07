@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Der Wachmann</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://esm.sh/three",
+          "three/addons/": "https://esm.sh/three/examples/jsm/",
+          "recast-navigation": "https://esm.sh/recast-navigation",
+          "recast-navigation/generators": "https://esm.sh/recast-navigation/generators"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene"></canvas>
+
+      <section class="panel command-panel" aria-label="Command panel" hidden>
+        <div class="status-line">
+          <span id="status-dot" class="status-dot"></span>
+          <span id="status">Загрузка сцены...</span>
+        </div>
+
+        <form id="command-form" class="command-form">
+          <input
+            id="command-input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Ich gehe ins Café und setze mich auf den Stuhl"
+          />
+          <button type="submit" title="Выполнить команду">Go</button>
+        </form>
+
+        <div id="target-list" class="target-list"></div>
+
+        <div class="toolbar">
+          <label class="toggle">
+            <input id="toggle-navmesh" type="checkbox" />
+            <span>Navmesh</span>
+          </label>
+          <label class="toggle">
+            <input id="toggle-targets" type="checkbox" />
+            <span>Ziele</span>
+          </label>
+          <button id="pick-target" type="button" title="Save a clicked object as a German target">Pick Ziel</button>
+          <button id="copy-targets" type="button" title="Copy Ziele coordinates and cut road areas as JSON">Copy coords</button>
+          <button id="fly-mode" type="button" title="Free flight camera mode">Fly</button>
+          <button id="cut-navmesh" type="button" title="Mark clicked navmesh areas as blocked">Cut road</button>
+          <label class="range-control" title="Cut radius">
+            <span>Radius</span>
+            <input id="cut-radius" type="range" min="0.8" max="8" value="3" step="0.2" />
+            <output id="cut-radius-value">3.0</output>
+          </label>
+          <button id="undo-cut" type="button" title="Undo last cut area">Undo cut</button>
+          <button id="clear-cuts" type="button" title="Clear all cut areas">Clear cuts</button>
+          <button id="rebuild-navmesh" type="button" title="Перестроить navmesh">Rebuild</button>
+        </div>
+
+        <form id="pick-form" class="pick-form" hidden>
+          <div id="pick-details" class="pick-details">-</div>
+          <div class="pick-fields">
+            <input id="pick-label" autocomplete="off" placeholder="Kirche / Stühle 1 / Bahnhof" />
+            <select id="pick-action" title="Action">
+              <option value="">goto</option>
+              <option value="sit">sit</option>
+              <option value="interact">interact</option>
+            </select>
+          </div>
+          <div class="pick-buttons">
+            <button type="submit">Save</button>
+            <button id="pick-cancel" type="button">Cancel</button>
+          </div>
+        </form>
+
+        <textarea id="export-output" class="export-output" readonly hidden></textarea>
+      </section>
+
+      <section class="panel dialogue-panel" aria-label="NPC dialogue">
+        <div id="quest-status" class="quest-status">Квест: Der Wachmann</div>
+        <div id="dialogue-target" class="npc-speech-line">Подойдите к персонажу и нажмите E</div>
+        <button id="interact-npc" type="button" title="Interact with nearest character" hidden>E</button>
+        <div id="dialogue-log" class="dialogue-log" hidden></div>
+        <div id="quest-chips" class="quest-chips" hidden></div>
+        <form id="dialogue-form" class="dialogue-form">
+          <input
+            id="dialogue-input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Напишите реплику персонажу"
+          />
+          <button id="dialogue-submit" type="submit" title="Send line to selected character" hidden>Talk</button>
+        </form>
+      </section>
+
+      <section class="panel mesh-panel" aria-label="Mesh navigation classes" hidden>
+        <div class="panel-title">Mesh-Tags</div>
+        <div id="mesh-stats" class="mesh-stats">-</div>
+        <div id="mesh-list" class="mesh-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
