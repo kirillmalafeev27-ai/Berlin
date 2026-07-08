@@ -657,8 +657,10 @@ async function transcribeWithElevenLabs(audio, contentType, language) {
   form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), 'speech.webm');
   form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
 
-  if (language) {
-    form.append('language_code', language);
+  // Only pin the language when explicitly configured; Scribe auto-detects well
+  // and an unexpected code would 400 the whole request.
+  if (process.env.ELEVENLABS_STT_LANGUAGE) {
+    form.append('language_code', process.env.ELEVENLABS_STT_LANGUAGE);
   }
 
   const remoteResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
