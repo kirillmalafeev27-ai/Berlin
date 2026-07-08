@@ -41,7 +41,28 @@ const dialogueInput = document.querySelector('#dialogue-input');
 const dialogueSubmit = document.querySelector('#dialogue-submit');
 const interactNpcButton = document.querySelector('#interact-npc');
 const micButton = document.querySelector('#mic-button');
+const micDeviceSelect = document.querySelector('#mic-device');
+const micMeter = document.querySelector('#mic-meter');
+const micMeterBar = micMeter?.querySelector('span') || null;
 const micTranscript = document.querySelector('#mic-transcript');
+const transitionOverlay = document.querySelector('#transition-overlay');
+const transitionTitle = document.querySelector('#transition-title');
+const locationLabel = document.querySelector('#location-label');
+const dayLabel = document.querySelector('#day-label');
+const exitLocationButton = document.querySelector('#exit-location');
+const dorfbuchOpenButton = document.querySelector('#dorfbuch-open');
+const dorfbuchPanel = document.querySelector('#dorfbuch-panel');
+const dorfbuchCloseButton = document.querySelector('#dorfbuch-close');
+const dorfbuchContent = document.querySelector('#dorfbuch-content');
+const walletOpenButton = document.querySelector('#wallet-open');
+const walletPanel = document.querySelector('#wallet-panel');
+const walletCloseButton = document.querySelector('#wallet-close');
+const walletStatus = document.querySelector('#wallet-status');
+const walletCount = document.querySelector('#wallet-count');
+const counterCount = document.querySelector('#counter-count');
+const coinGame = document.querySelector('#coin-game');
+const coinResetButton = document.querySelector('#coin-reset');
+const coinPayButton = document.querySelector('#coin-pay');
 
 if (dialogueInput) {
   dialogueInput.placeholder = 'Напишите или скажите 🎤 немецкую фразу';
@@ -52,6 +73,7 @@ const CUSTOM_TARGET_STORAGE_KEY = 'berlin-game.custom-targets.v1';
 const DELETED_TARGET_STORAGE_KEY = 'berlin-game.deleted-targets.v1';
 const NAV_AREA_BLOCK_STORAGE_KEY = 'berlin-game.nav-area-blocks.v1';
 const MAP_URL = '/fantasy-town.glb';
+const GASTHAUS_INTERIOR_URL = '/low_poly_tavern_interior.glb';
 const CHARACTER_MODEL_URL = '/Meshy_AI_Character_output.fbx';
 const EMPTY_TEXTURE_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lb9ZfwAAAABJRU5ErkJggg==';
@@ -83,6 +105,147 @@ const QUEST_POINTS = {
   market: new THREE.Vector3(78.0, 4.82, 73.0),
   well: new THREE.Vector3(34.2, 4.82, 115.5),
 };
+const LOCATION_VILLAGE = 'village';
+const LOCATION_GASTHAUS = 'gasthaus';
+const GASTHAUS_ENTRY_TARGET_ID = 'gasthaus_gruenbach';
+const GASTHAUS_DOOR_POINT = new THREE.Vector3(72.0, 4.82, 57.0);
+const GASTHAUS_APPROACH_POINT = new THREE.Vector3(70.2, 4.82, 59.2);
+const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
+const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(0, 0.08, 5.8);
+const GASTHAUS_BOUNDS = { minX: -5.8, maxX: 5.8, minZ: -6.2, maxZ: 6.4, y: 0.08 };
+const GASTHAUS_ENTRY_TARGET = {
+  id: GASTHAUS_ENTRY_TARGET_ID,
+  label: 'Gasthaus Grünbach',
+  aliases: ['gasthaus', 'gasthaus gruenbach', 'gasthaus grünbach', 'hotel', 'inn', 'tavern', 'гостиница'],
+  type: 'interactive',
+  action: 'enter_gasthaus',
+  position: serializePlainVector(GASTHAUS_DOOR_POINT),
+  approachPosition: serializePlainVector(GASTHAUS_APPROACH_POINT),
+};
+const GASTHAUS_NPCS = [
+  {
+    id: 'frau_berta',
+    label: 'Frau Berta',
+    role: 'Frau Berta, the loud, warm, businesslike innkeeper of Gasthaus Grünbach',
+    aliases: ['berta', 'frau berta', 'wirtin', 'innkeeper', 'хозяйка'],
+    position: new THREE.Vector3(-1.8, 0.08, -2.55),
+    yaw: Math.PI,
+    color: 0x7d3f98,
+  },
+  {
+    id: 'gast_joerg',
+    label: 'Gast Jörg',
+    role: 'Jörg, a relaxed guest at the tavern table',
+    aliases: ['jörg', 'joerg', 'gast', 'guest', 'постоялец'],
+    position: new THREE.Vector3(2.35, 0.08, -0.6),
+    yaw: -Math.PI / 2,
+    color: 0x426aa4,
+  },
+];
+const GASTHAUS_DOOR_TARGETS = [
+  { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.6, 0.08, -5.4) },
+  { id: 'room_zwei', label: 'Tür zwei', word: 'zwei', position: new THREE.Vector3(-1.2, 0.08, -5.4) },
+  { id: 'room_drei', label: 'Tür drei', word: 'drei', position: new THREE.Vector3(1.2, 0.08, -5.4) },
+  { id: 'room_vier', label: 'Tür vier', word: 'vier', position: new THREE.Vector3(3.6, 0.08, -5.4) },
+];
+const QUEST_THREE_ID = 'drei_nachbarn';
+const QUEST_THREE_NPCS = [
+  {
+    id: 'baecker_hans',
+    label: 'Bäcker Hans',
+    shortName: 'Hans',
+    role: 'Hans, a friendly village baker. Answers A1 German questions clearly and briefly.',
+    aliases: ['hans', 'baecker', 'bäcker', 'baker', 'пекарь'],
+    color: 0xc57b2d,
+    position: new THREE.Vector3(67.0, 4.82, 58.0),
+    yaw: -Math.PI / 2,
+    facts: {
+      name: 'Hans',
+      job: 'Bäcker',
+      lives: 'über der Bäckerei',
+      age: 'vierzig',
+    },
+    answers: {
+      name: 'Ich bin Hans. Der Bäcker!',
+      job: 'Ich mache Brot. Ich bin Bäcker.',
+      lives: 'Hier! Über der Bäckerei.',
+      age: 'Ich? Vierzig!',
+    },
+  },
+  {
+    id: 'muellerin_greta',
+    label: 'Müllerin Greta',
+    shortName: 'Greta',
+    role: 'Greta, the miller. She walks along the road and asks the player one return question.',
+    aliases: ['greta', 'muellerin', 'müllerin', 'miller', 'мельничиха'],
+    color: 0x5d8a55,
+    position: new THREE.Vector3(83.0, 4.82, 70.0),
+    yaw: Math.PI,
+    patrolPoints: [new THREE.Vector3(83.0, 4.82, 70.0), new THREE.Vector3(91.0, 4.82, 61.0)],
+    facts: {
+      name: 'Greta',
+      job: 'Müllerin',
+      lives: 'bei der Mühle',
+      age: 'dreißig',
+    },
+    answers: {
+      name: 'Ich heiße Greta. Ich arbeite in der Mühle - da! Und du? Was machst du hier?',
+      job: 'Ich arbeite in der Mühle. Ich mache Mehl.',
+      lives: 'Ich wohne bei der Mühle.',
+      age: 'Dreißig. Und immer müde!',
+    },
+  },
+  {
+    id: 'lehrerin_ida',
+    label: 'Lehrerin Ida',
+    shortName: 'Ida',
+    role: 'Ida, the village teacher. Gives slightly longer but still A1-level answers.',
+    aliases: ['ida', 'lehrerin', 'teacher', 'учительница'],
+    color: 0x6d6fb3,
+    position: new THREE.Vector3(45.5, 4.82, 66.5),
+    yaw: Math.PI / 2,
+    facts: {
+      name: 'Ida',
+      job: 'Lehrerin',
+      lives: 'bei der Schule',
+      age: 'achtundzwanzig',
+    },
+    answers: {
+      name: 'Mein Name ist Ida. Ich bin Lehrerin, aber die Schule ist klein - nur sieben Kinder.',
+      job: 'Ich bin Lehrerin. Ich arbeite in der Schule.',
+      lives: 'Ich wohne bei der Schule, links vom Turm.',
+      age: 'Achtundzwanzig. Komm morgen zur Schule!',
+    },
+  },
+];
+const QUEST_THREE_SLOT_LABELS = {
+  name: 'Name',
+  job: 'Beruf',
+  lives: 'Wohnt',
+};
+const GERMAN_NUMBERS = [
+  'null',
+  'eins',
+  'zwei',
+  'drei',
+  'vier',
+  'fünf',
+  'sechs',
+  'sieben',
+  'acht',
+  'neun',
+  'zehn',
+  'elf',
+  'zwölf',
+  'dreizehn',
+  'vierzehn',
+  'fünfzehn',
+  'sechzehn',
+  'siebzehn',
+  'achtzehn',
+  'neunzehn',
+  'zwanzig',
+];
 const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
 // Used only when the asset manifest reports no rigged characters, so the gate
 // still has a guard to talk to.
@@ -368,6 +531,47 @@ const questState = {
   attempts: 0,
   currentLine: null,
 };
+const locationState = {
+  current: LOCATION_VILLAGE,
+  day: 1,
+  transitioning: false,
+  gasthausLoaded: false,
+  gasthausPrompted: false,
+};
+const gasthausQuest = {
+  stage: 'idle',
+  wallet: 20,
+  counter: 0,
+  mistakes: 0,
+  hasKey: false,
+  completed: false,
+  menuRead: false,
+  joergAnswered: false,
+  dorfbuchUnlocked: false,
+  openedRooms: new Set(),
+};
+const questThreeState = {
+  unlocked: false,
+  active: false,
+  completed: false,
+  readyForBerta: false,
+  bertaRewarded: false,
+  gretaAwaitingSelfAnswer: false,
+  gretaGreeted: false,
+  slots: Object.fromEntries(
+    QUEST_THREE_NPCS.map((npc) => [
+      npc.id,
+      {
+        name: false,
+        job: false,
+        lives: false,
+      },
+    ]),
+  ),
+};
+let gasthausRoot = null;
+let gasthausModel = null;
+let gasthausInteractables = new Map();
 
 const agent = {
   position: new THREE.Vector3(0, 0, 0),
@@ -403,6 +607,21 @@ window.__berlinGame = {
   get navAreaBlocks() {
     return navAreaBlocks;
   },
+  get locationState() {
+    return { ...locationState };
+  },
+  get gasthausQuest() {
+    return {
+      ...gasthausQuest,
+      openedRooms: [...gasthausQuest.openedRooms],
+    };
+  },
+  get questThreeState() {
+    return {
+      ...questThreeState,
+      slots: JSON.parse(JSON.stringify(questThreeState.slots)),
+    };
+  },
   get characterAnimations() {
     return [...characterAnimations.keys()];
   },
@@ -411,6 +630,9 @@ window.__berlinGame = {
   unlockGameAudio,
   moveToTarget,
   playCharacterAnimation,
+  enterGasthaus,
+  leaveGasthaus,
+  unlockQuestThree,
 };
 
 function setStatus(message, state = 'loading') {
@@ -510,6 +732,14 @@ function serializeVector(vector) {
   };
 }
 
+function serializePlainVector(vector) {
+  return {
+    x: Number(vector.x.toFixed(4)),
+    y: Number(vector.y.toFixed(4)),
+    z: Number(vector.z.toFixed(4)),
+  };
+}
+
 function publishDebugState() {
   const lastPathDebug = navigation?.lastPathDebug || null;
   const targets = registry?.targets.map((target) => ({
@@ -538,6 +768,11 @@ function publishDebugState() {
     navAreaBlocks,
     flyMode: isFlyMode,
     cutMode: isCutMode,
+    location: {
+      current: locationState.current,
+      day: locationState.day,
+      transitioning: locationState.transitioning,
+    },
     quest: {
       enabled: QUEST_ENABLED,
       stage: questState.stage,
@@ -546,6 +781,22 @@ function publishDebugState() {
       completed: questState.completed,
       playerName: questState.playerName,
       playerOrigin: questState.playerOrigin,
+    },
+    gasthaus: {
+      stage: gasthausQuest.stage,
+      wallet: gasthausQuest.wallet,
+      counter: gasthausQuest.counter,
+      hasKey: gasthausQuest.hasKey,
+      completed: gasthausQuest.completed,
+      dorfbuchUnlocked: gasthausQuest.dorfbuchUnlocked,
+    },
+    questThree: {
+      unlocked: questThreeState.unlocked,
+      active: questThreeState.active,
+      completed: questThreeState.completed,
+      readyForBerta: questThreeState.readyForBerta,
+      bertaRewarded: questThreeState.bertaRewarded,
+      slots: questThreeState.slots,
     },
     character: {
       loaded: Boolean(characterModel),
@@ -565,6 +816,7 @@ function publishDebugState() {
       id: npc.id,
       label: npc.label,
       role: npc.role,
+      location: npc.location || LOCATION_VILLAGE,
       loaded: Boolean(npc.model),
       state: npc.state,
       currentAnimation: npc.currentAnimationName,
@@ -603,6 +855,1540 @@ function loadCustomTargets() {
 
 function saveCustomTargets() {
   localStorage.setItem(CUSTOM_TARGET_STORAGE_KEY, JSON.stringify(customTargets));
+}
+
+function getRegistryCustomTargets() {
+  if (locationState.current !== LOCATION_VILLAGE) {
+    return customTargets;
+  }
+
+  return [GASTHAUS_ENTRY_TARGET, ...customTargets];
+}
+
+function isNpcActiveForLocation(npc) {
+  if (npc?.questId === QUEST_THREE_ID && !questThreeState.unlocked) {
+    return false;
+  }
+
+  return !npc?.location || npc.location === locationState.current;
+}
+
+function isGasthausNpc(npc) {
+  return npc?.location === LOCATION_GASTHAUS;
+}
+
+function isQuestThreeNpc(npc) {
+  return npc?.questId === QUEST_THREE_ID;
+}
+
+function getBerta() {
+  return getNpcById('frau_berta');
+}
+
+function getGermanNumber(value) {
+  return GERMAN_NUMBERS[value] || String(value);
+}
+
+function waitFor(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function updateLocationHud() {
+  if (dayLabel) {
+    dayLabel.textContent = `Tag ${locationState.day}`;
+  }
+
+  if (locationLabel) {
+    locationLabel.textContent =
+      locationState.current === LOCATION_GASTHAUS ? 'Gasthaus Grünbach' : 'Dorf Grünbach';
+  }
+
+  if (exitLocationButton) {
+    exitLocationButton.hidden = locationState.current !== LOCATION_GASTHAUS;
+  }
+}
+
+async function runTransition(title, task) {
+  if (locationState.transitioning) {
+    return;
+  }
+
+  locationState.transitioning = true;
+
+  if (transitionTitle) {
+    transitionTitle.textContent = title;
+  }
+
+  transitionOverlay?.classList.add('active');
+  await waitFor(380);
+
+  try {
+    await task?.();
+  } finally {
+    updateLocationHud();
+    await waitFor(260);
+    transitionOverlay?.classList.remove('active');
+    await waitFor(220);
+    locationState.transitioning = false;
+  }
+}
+
+async function showDayTransition(day) {
+  await runTransition(`Tag ${day}`, async () => {
+    locationState.day = day;
+  });
+}
+
+function setFeaturePanel(panel, open) {
+  if (panel) {
+    panel.hidden = !open;
+  }
+}
+
+function getQuestThreeDefinition(id) {
+  return QUEST_THREE_NPCS.find((npc) => npc.id === id) || null;
+}
+
+function getQuestThreeProgress() {
+  const total = QUEST_THREE_NPCS.length * Object.keys(QUEST_THREE_SLOT_LABELS).length;
+  let filled = 0;
+
+  for (const npcDef of QUEST_THREE_NPCS) {
+    const slots = questThreeState.slots[npcDef.id] || {};
+
+    for (const slot of Object.keys(QUEST_THREE_SLOT_LABELS)) {
+      if (slots[slot]) {
+        filled += 1;
+      }
+    }
+  }
+
+  return { filled, total };
+}
+
+function isQuestThreeComplete() {
+  const progress = getQuestThreeProgress();
+  return progress.filled >= progress.total;
+}
+
+function getQuestThreeDorfbuchRows(npcDef) {
+  const slots = questThreeState.slots[npcDef.id] || {};
+
+  return Object.entries(QUEST_THREE_SLOT_LABELS).map(([slot, label]) => [
+    label,
+    slots[slot] ? npcDef.facts[slot] : '???',
+  ]);
+}
+
+function renderDorfbuch() {
+  if (!dorfbuchContent) {
+    return;
+  }
+
+  dorfbuchContent.replaceChildren();
+  const questThreeProgress = getQuestThreeProgress();
+
+  const cards = [
+    {
+      title: 'Quest 02: Das Gasthaus',
+      rows: [
+        ['Grammatik', 'haben: ich habe, Sie haben, du hast'],
+        ['Preisfrage', 'Wie viel kostet das Zimmer?'],
+        ['Zimmer', gasthausQuest.completed ? 'Zimmer drei ist dein Zimmer.' : 'Noch kein Zimmer.'],
+        ['Schlüssel', gasthausQuest.hasKey ? 'der Schlüssel' : 'Noch nicht erhalten.'],
+      ],
+    },
+    {
+      title: 'Sprachbuch: Geld',
+      rows: [
+        ['das Geld', 'деньги'],
+        ['die Münze', 'монета'],
+        ['zu wenig', gasthausQuest.mistakes > 0 ? 'слишком мало' : 'ещё не открыто'],
+        ['zu viel', gasthausQuest.counter > 12 ? 'слишком много' : 'откроется при ошибке'],
+      ],
+    },
+    {
+      title: 'Dorfbuch: Nachbarn',
+      rows: [
+        ['Status', questThreeState.unlocked ? `${questThreeProgress.filled}/${questThreeProgress.total}` : 'Noch nicht erhalten.'],
+        ['Aufgabe', questThreeState.unlocked ? 'Frage Hans, Greta und Ida: Wer? Was? Wo?' : 'Berta gibt es dir nach der Nacht.'],
+      ],
+    },
+    ...QUEST_THREE_NPCS.map((npcDef) => ({
+      title: npcDef.label,
+      rows: questThreeState.unlocked ? getQuestThreeDorfbuchRows(npcDef) : [['Name', '???'], ['Beruf', '???'], ['Wohnt', '???']],
+    })),
+  ];
+
+  for (const card of cards) {
+    const element = document.createElement('article');
+    element.className = 'dorfbuch-card';
+
+    const title = document.createElement('h3');
+    title.textContent = card.title;
+
+    const list = document.createElement('dl');
+
+    for (const [term, value] of card.rows) {
+      const dt = document.createElement('dt');
+      dt.textContent = term;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      list.append(dt, dd);
+    }
+
+    element.append(title, list);
+    dorfbuchContent.append(element);
+  }
+}
+
+function openDorfbuchPanel() {
+  renderDorfbuch();
+  setFeaturePanel(dorfbuchPanel, true);
+}
+
+function renderWallet() {
+  if (!coinGame) {
+    return;
+  }
+
+  if (walletCount) {
+    walletCount.textContent = String(gasthausQuest.wallet);
+  }
+
+  if (counterCount) {
+    counterCount.textContent = String(gasthausQuest.counter);
+  }
+
+  if (walletStatus) {
+    walletStatus.textContent =
+      gasthausQuest.stage === 'count_money'
+        ? 'Положите ровно zwölf Münzen на стойку.'
+        : 'Кошелёк готов. Berta попросит zwölf Münzen за комнату.';
+  }
+
+  coinGame.replaceChildren();
+
+  const totalCoins = gasthausQuest.wallet + gasthausQuest.counter;
+
+  for (let index = 1; index <= totalCoins; index += 1) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `coin-button${index <= gasthausQuest.counter ? ' spent' : ''}`;
+    button.textContent = index <= gasthausQuest.counter ? getGermanNumber(index) : 'M';
+    button.disabled = index <= gasthausQuest.counter || gasthausQuest.stage !== 'count_money';
+    button.addEventListener('click', () => placeGasthausCoin());
+    coinGame.append(button);
+  }
+}
+
+function openWalletPanel() {
+  renderWallet();
+  setFeaturePanel(walletPanel, true);
+}
+
+function resetGasthausCoins() {
+  gasthausQuest.wallet += gasthausQuest.counter;
+  gasthausQuest.counter = 0;
+  renderWallet();
+}
+
+function gasthausSetStatus(message) {
+  setQuestStatus(`Квест: Das Gasthaus - ${message}`);
+}
+
+async function gasthausSpeak(npc, de, ru = '', options = {}) {
+  setSelectedNpc(npc, { focusInput: options.focusInput !== false });
+  return speakQuestLine(npc, de, ru, {
+    intent: options.intent || 'talk',
+    append: options.append,
+  });
+}
+
+function gasthausChipsForStage(stage = gasthausQuest.stage) {
+  if (stage === 'greeting') {
+    return [
+      { label: 'Guten Tag! Ich bin ___', template: 'Guten Tag! Ich bin ___' },
+      { label: 'Ich bin ___', template: 'Ich bin ___' },
+      { label: 'Wie bitte?', action: 'repeat' },
+      { label: 'Hilfe', action: 'help' },
+    ];
+  }
+
+  if (stage === 'ask_room') {
+    return [
+      { label: 'Haben Sie ein Zimmer?', submit: 'Haben Sie ein Zimmer?' },
+      { label: 'Ich möchte ein Zimmer', submit: 'Ich möchte ein Zimmer' },
+      { label: 'Hilfe', action: 'help' },
+    ];
+  }
+
+  if (stage === 'negotiate_price') {
+    return [
+      { label: 'Wie viel kostet das Zimmer?', submit: 'Wie viel kostet das Zimmer?' },
+      { label: 'Was kostet das?', submit: 'Was kostet das?' },
+      { label: 'Hilfe', action: 'help' },
+    ];
+  }
+
+  if (stage === 'count_money') {
+    return [
+      { label: 'Geldbeutel', action: 'open-wallet' },
+      { label: 'Zwölf?', action: 'help' },
+      { label: 'Bitte', submit: 'Bitte' },
+    ];
+  }
+
+  if (stage === 'get_key') {
+    return [
+      { label: 'Tür eins', action: 'room', room: 'eins' },
+      { label: 'Tür zwei', action: 'room', room: 'zwei' },
+      { label: 'Tür drei', action: 'room', room: 'drei' },
+      { label: 'Tür vier', action: 'room', room: 'vier' },
+    ];
+  }
+
+  if (stage === 'success') {
+    return [
+      { label: 'Dorfbuch', action: 'open-dorfbuch' },
+      { label: 'Wie viele Münzen?', submit: 'Wie viele Münzen hast du?' },
+    ];
+  }
+
+  return [];
+}
+
+function renderGasthausChips() {
+  renderQuestChips(gasthausChipsForStage());
+}
+
+function parseGasthausRoomRequest(input) {
+  const text = normalizeText(input);
+  return (
+    /(?:haben sie|hast du).*(?:zimmer)/.test(text) ||
+    /(?:ich )?(?:brauche|moechte|mochte).*(?:zimmer)/.test(text) ||
+    /^zimmer\??$/.test(text)
+  );
+}
+
+function parseGasthausPriceQuestion(input) {
+  const text = normalizeText(input);
+  return (
+    /(?:wie viel|wieviel|was).*(?:kostet|kosten)/.test(text) ||
+    /(?:kostet|kosten).*(?:zimmer|das)/.test(text) ||
+    /(?:preis|teuer|billig)/.test(text)
+  );
+}
+
+async function placeGasthausCoin() {
+  const berta = getBerta();
+
+  if (!berta || gasthausQuest.stage !== 'count_money' || gasthausQuest.wallet <= 0) {
+    return;
+  }
+
+  gasthausQuest.wallet -= 1;
+  gasthausQuest.counter += 1;
+  renderWallet();
+  await gasthausSpeak(berta, `${getGermanNumber(gasthausQuest.counter)}!`, '', {
+    append: false,
+    intent: 'counting',
+    focusInput: false,
+  });
+}
+
+async function submitGasthausPayment() {
+  const berta = getBerta();
+
+  if (!berta || gasthausQuest.stage !== 'count_money') {
+    return;
+  }
+
+  if (gasthausQuest.counter === 12) {
+    gasthausQuest.stage = 'get_key';
+    gasthausQuest.hasKey = true;
+    renderGasthausChips();
+    renderWallet();
+    await gasthausSpeak(
+      berta,
+      'Zwölf! Perfekt! Hier - der Schlüssel! Zimmer drei. Oben.',
+      'Двенадцать! Отлично! Вот ключ. Комната три. Наверху.',
+      { intent: 'happy' },
+    );
+    return;
+  }
+
+  gasthausQuest.mistakes += 1;
+
+  if (gasthausQuest.counter < 12) {
+    await gasthausSpeak(
+      berta,
+      'Nein, nein. Das ist zu wenig. Zwölf!',
+      'Нет-нет. Слишком мало. Двенадцать!',
+      { intent: 'thinking' },
+    );
+  } else {
+    const extra = gasthausQuest.counter - 12;
+    gasthausQuest.wallet += extra;
+    gasthausQuest.counter = 12;
+    await gasthausSpeak(
+      berta,
+      'Halt! Zu viel! Zurück.',
+      'Стоп! Слишком много! Возьми лишнее назад.',
+      { intent: 'thinking' },
+    );
+  }
+
+  if (gasthausQuest.mistakes >= 3) {
+    openDorfbuchPanel();
+  }
+
+  renderWallet();
+}
+
+async function handleGasthausRoom(word) {
+  const berta = getBerta();
+
+  if (!berta) {
+    return;
+  }
+
+  gasthausQuest.openedRooms.add(word);
+
+  if (!gasthausQuest.hasKey) {
+    await gasthausSpeak(berta, 'Erst der Schlüssel, bitte.', 'Сначала ключ, пожалуйста.');
+    return;
+  }
+
+  if (word !== 'drei') {
+    await gasthausSpeak(berta, `Nein, ${word} ist zu. Zimmer drei!`, `Нет, ${word} закрыта. Комната три!`, {
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  gasthausQuest.completed = true;
+  gasthausQuest.stage = 'success';
+  gasthausQuest.dorfbuchUnlocked = true;
+  renderGasthausChips();
+  renderDorfbuch();
+  await gasthausSpeak(
+    berta,
+    'Sehr gut. Schlaf gut! Morgen bekommst du das Dorfbuch.',
+    'Очень хорошо. Спокойной ночи! Завтра ты получишь Dorfbuch.',
+    { intent: 'happy' },
+  );
+  await showDayTransition(Math.max(locationState.day + 1, 2));
+  unlockQuestThree();
+  await gasthausSpeak(
+    berta,
+    'Guten Morgen! Hier - dein Dorfbuch. Geh raus, sprich mit den Leuten!',
+    'Доброе утро! Вот твоя деревенская книга. Выйди и поговори с людьми!',
+    { intent: 'happy' },
+  );
+}
+
+function showGasthausHelp() {
+  const berta = getBerta();
+
+  if (!berta) {
+    return;
+  }
+
+  if (gasthausQuest.stage === 'count_money') {
+    gasthausSpeak(berta, 'Zwölf. Eins, zwei, drei... zwölf!', 'Двенадцать. Раз, два, три... двенадцать!', {
+      intent: 'helpful',
+    });
+    openWalletPanel();
+    return;
+  }
+
+  if (gasthausQuest.stage === 'ask_room') {
+    gasthausSpeak(berta, 'Sag: Haben Sie ein Zimmer?', 'Скажи: У вас есть комната?', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'negotiate_price') {
+    gasthausSpeak(berta, 'Frag: Wie viel kostet das Zimmer?', 'Спроси: Сколько стоит комната?', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  gasthausSpeak(berta, 'Langsam: Ich bin Kirill.', 'Медленно: Я Кирилл.', { intent: 'helpful' });
+}
+
+async function openGasthausQuestDialogue() {
+  const berta = getBerta();
+
+  if (!berta) {
+    return;
+  }
+
+  if (await finishQuestThreeWithBerta(berta)) {
+    return;
+  }
+
+  if (gasthausQuest.completed && questThreeState.unlocked && !questThreeState.completed) {
+    gasthausQuest.stage = 'success';
+    gasthausSetStatus('Dorfbuch: спросите соседей');
+    renderGasthausChips();
+    await gasthausSpeak(
+      berta,
+      'Geh raus, sprich mit Hans, Greta und Ida. Frag: Wer? Was? Wo?',
+      'Выйди и поговори с Hans, Greta и Ida. Спроси: Wer? Was? Wo?',
+      { intent: 'helpful' },
+    );
+    return;
+  }
+
+  if (gasthausQuest.completed) {
+    gasthausQuest.stage = 'success';
+    gasthausSetStatus('Dorfbuch открыт');
+    renderGasthausChips();
+    await gasthausSpeak(berta, 'Wie viele Münzen hast du?', 'Сколько у тебя монет?', { intent: 'greeting' });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'idle') {
+    gasthausQuest.stage = 'greeting';
+  }
+
+  renderGasthausChips();
+
+  if (gasthausQuest.stage === 'ask_room') {
+    gasthausSetStatus('попросите комнату');
+    await gasthausSpeak(
+      berta,
+      `So, ${questState.playerName || 'Gast'}. Was brauchst du?`,
+      `Так, ${questState.playerName || 'гость'}. Что тебе нужно?`,
+      { intent: 'thinking' },
+    );
+    return;
+  }
+
+  if (gasthausQuest.stage === 'negotiate_price') {
+    gasthausSetStatus('спросите цену');
+    await gasthausSpeak(berta, 'Klein, aber gut. Was möchtest du wissen?', 'Маленькая, но хорошая. Что хочешь узнать?', {
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'count_money') {
+    gasthausSetStatus('отсчитайте 12 монет');
+    openWalletPanel();
+    await gasthausSpeak(berta, 'Eine Nacht - zwölf Münzen.', 'Одна ночь - двенадцать монет.', {
+      intent: 'counting',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'get_key') {
+    gasthausSetStatus('найдите Zimmer drei');
+    await gasthausSpeak(berta, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful' });
+    return;
+  }
+
+  gasthausSetStatus('Frau Berta ждёт имя');
+  await gasthausSpeak(
+    berta,
+    'Oh, ein Gast! Guten Tag! Ich bin Berta. Und du bist...?',
+    'О, гость! Добрый день! Я Берта. А ты...?',
+    { intent: 'greeting' },
+  );
+}
+
+async function sendGasthausDialogueToNpc(npc, message) {
+  const line = String(message || '').trim();
+
+  if (!line) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc);
+  appendDialogue(npc, 'player', line);
+  dialogueInput.value = '';
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  if (npc.id === 'gast_joerg') {
+    gasthausQuest.joergAnswered = true;
+    renderDorfbuch();
+    await gasthausSpeak(npc, /^ja\b/i.test(line) ? 'Ja! Schönes Dorf. Prost!' : 'Nein? Trotzdem: Prost!', '', {
+      intent: 'happy',
+    });
+    return;
+  }
+
+  if (/^(hilfe|help|помощь)$/i.test(line)) {
+    showGasthausHelp();
+    return;
+  }
+
+  if (/^wie bitte\??$/i.test(line)) {
+    repeatQuestPrompt();
+    return;
+  }
+
+  if (gasthausQuest.stage === 'greeting') {
+    const parsed = parseQuestName(line);
+
+    if (!parsed) {
+      showGasthausHelp();
+      return;
+    }
+
+    questState.playerName = questState.playerName || parsed.value;
+    gasthausQuest.stage = 'ask_room';
+    gasthausSetStatus('попросите комнату');
+    renderGasthausChips();
+    await gasthausSpeak(bertaOrNpc(npc), `So, ${parsed.value}. Was brauchst du?`, `Так, ${parsed.value}. Что тебе нужно?`, {
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'ask_room') {
+    if (!parseGasthausRoomRequest(line)) {
+      showGasthausHelp();
+      return;
+    }
+
+    gasthausQuest.stage = 'negotiate_price';
+    gasthausSetStatus('спросите цену');
+    renderGasthausChips();
+    await gasthausSpeak(
+      npc,
+      'Ein Zimmer? Ja! Ich habe ein Zimmer. Klein, aber gut!',
+      'Комната? Да! У меня есть комната. Маленькая, но хорошая!',
+      { intent: 'happy' },
+    );
+    return;
+  }
+
+  if (gasthausQuest.stage === 'negotiate_price') {
+    if (!parseGasthausPriceQuestion(line)) {
+      showGasthausHelp();
+      return;
+    }
+
+    gasthausQuest.stage = 'count_money';
+    gasthausSetStatus('отсчитайте 12 монет');
+    renderGasthausChips();
+    openWalletPanel();
+    await gasthausSpeak(npc, 'Eine Nacht - zwölf Münzen.', 'Одна ночь - двенадцать монет.', {
+      intent: 'counting',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'count_money') {
+    if (/bitte|danke/i.test(line)) {
+      await submitGasthausPayment();
+      return;
+    }
+
+    openWalletPanel();
+    await gasthausSpeak(npc, 'Leg die Münzen auf die Theke. Zwölf!', 'Положи монеты на стойку. Двенадцать!', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  if (gasthausQuest.stage === 'get_key') {
+    const normalized = normalizeText(line);
+    const room = GASTHAUS_DOOR_TARGETS.find((target) => normalized.includes(normalizeText(target.word)));
+
+    if (room) {
+      await handleGasthausRoom(room.word);
+      return;
+    }
+
+    await gasthausSpeak(npc, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful' });
+    return;
+  }
+
+  await gasthausSpeak(npc, 'Gut. Willkommen im Gasthaus!', 'Хорошо. Добро пожаловать в Gasthaus!', {
+    intent: 'happy',
+  });
+}
+
+function bertaOrNpc(npc) {
+  return getBerta() || npc;
+}
+
+function setQuestThreeStatus(message) {
+  setQuestStatus(`Квест: Drei Nachbarn - ${message}`);
+}
+
+function unlockQuestThree() {
+  if (questThreeState.unlocked) {
+    return;
+  }
+
+  questThreeState.unlocked = true;
+  questThreeState.active = true;
+  gasthausQuest.dorfbuchUnlocked = true;
+  ensureQuestThreeNpcs();
+  renderDorfbuch();
+  setQuestThreeStatus('заполните Dorfbuch');
+}
+
+function questThreeChipsForNpc(npc) {
+  if (!npc || !isQuestThreeNpc(npc)) {
+    return [];
+  }
+
+  if (npc.id === 'muellerin_greta' && !questThreeState.gretaGreeted) {
+    return [
+      { label: 'Hallo!', submit: 'Hallo!' },
+      { label: 'Entschuldigung!', submit: 'Entschuldigung!' },
+      { label: 'Dorfbuch', action: 'open-dorfbuch' },
+    ];
+  }
+
+  if (npc.id === 'muellerin_greta' && questThreeState.gretaAwaitingSelfAnswer) {
+    return [
+      { label: 'Ich bin neu hier', submit: 'Ich bin neu hier' },
+      { label: 'Ich spreche mit den Leuten', submit: 'Ich spreche mit den Leuten' },
+      { label: 'Dorfbuch', action: 'open-dorfbuch' },
+    ];
+  }
+
+  return [
+    { label: 'Wer bist du?', submit: 'Wer bist du?' },
+    { label: 'Was machst du?', submit: 'Was machst du?' },
+    { label: 'Wo wohnst du?', submit: 'Wo wohnst du?' },
+    { label: 'Dorfbuch', action: 'open-dorfbuch' },
+  ];
+}
+
+function renderQuestThreeChips(npc = selectedNpc) {
+  renderQuestChips(questThreeChipsForNpc(npc));
+}
+
+async function questThreeSpeak(npc, de, ru = '', options = {}) {
+  setSelectedNpc(npc, { focusInput: options.focusInput !== false });
+  renderQuestThreeChips(npc);
+  return speakQuestLine(npc, de, ru, {
+    intent: options.intent || 'talk',
+    append: options.append,
+  });
+}
+
+function parseQuestThreeQuestion(input) {
+  const text = normalizeText(input);
+
+  if (/^(hallo|guten tag|guten morgen|entschuldigung|servus|hi|hey)\b/.test(text)) {
+    return 'greeting';
+  }
+
+  if (/(wer bist du|wie heisst du|wie heisst du|wie heißt du|wie heissen sie|wer sind sie|wer du|name)/.test(text)) {
+    return 'name';
+  }
+
+  if (/(was machst du|was ist dein beruf|was arbeitest du|was machen|arbeitest|beruf)/.test(text)) {
+    return 'job';
+  }
+
+  if (/(wo wohnst du|wo wohnen sie|wo wohnst|wo lebst du|wo ist dein haus|wo ist die wohnung)/.test(text)) {
+    return 'lives';
+  }
+
+  if (/(wie alt bist du|wie alt|alter)/.test(text)) {
+    return 'age';
+  }
+
+  if (/(ich bin neu hier|ich bin neu|ich spreche|ich frage|ich mache|ich komme|neu hier)/.test(text)) {
+    return 'self';
+  }
+
+  return null;
+}
+
+function fillQuestThreeSlot(npc, slot) {
+  if (!npc || !questThreeState.slots[npc.id] || !(slot in questThreeState.slots[npc.id])) {
+    return;
+  }
+
+  questThreeState.slots[npc.id][slot] = true;
+  renderDorfbuch();
+
+  if (isQuestThreeComplete()) {
+    questThreeState.completed = true;
+    questThreeState.active = false;
+    questThreeState.readyForBerta = true;
+    setQuestThreeStatus('вернитесь в Gasthaus к Berta');
+    renderTargets();
+  } else {
+    const progress = getQuestThreeProgress();
+    setQuestThreeStatus(`Dorfbuch ${progress.filled}/${progress.total}`);
+  }
+}
+
+async function openQuestThreeDialogue(npc) {
+  if (!npc) {
+    return;
+  }
+
+  setSelectedNpc(npc, { focusInput: true });
+  renderQuestThreeChips(npc);
+  npc.path = [];
+  npc.pathIndex = 0;
+  npc.state = 'idle';
+  npc.waitTimer = 1.4;
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  if (npc.id === 'muellerin_greta' && !questThreeState.gretaGreeted) {
+    setQuestThreeStatus('привлеките внимание Greta');
+    await questThreeSpeak(npc, '...', 'Сначала поздоровайтесь: Hallo или Entschuldigung.', {
+      append: false,
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  setQuestThreeStatus('задайте W-вопрос');
+  await questThreeSpeak(npc, 'Frag mich: Wer? Was? Wo?', 'Спроси меня: кто? что делает? где живёт?', {
+    append: false,
+    intent: 'helpful',
+  });
+}
+
+async function sendQuestThreeDialogueToNpc(npc, message) {
+  const line = String(message || '').trim();
+
+  if (!line) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc);
+  appendDialogue(npc, 'player', line);
+  dialogueInput.value = '';
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  const question = parseQuestThreeQuestion(line);
+  const definition = getQuestThreeDefinition(npc.id);
+
+  if (!definition) {
+    return;
+  }
+
+  if (npc.id === 'muellerin_greta' && !questThreeState.gretaGreeted) {
+    if (question !== 'greeting') {
+      await questThreeSpeak(npc, 'Hm? Erst: Hallo!', 'Хм? Сначала: Hallo!', { intent: 'thinking' });
+      return;
+    }
+
+    questThreeState.gretaGreeted = true;
+    renderQuestThreeChips(npc);
+    await questThreeSpeak(npc, 'Hallo! Ja?', 'Привет! Да?', { intent: 'greeting' });
+    return;
+  }
+
+  if (npc.id === 'muellerin_greta' && questThreeState.gretaAwaitingSelfAnswer) {
+    if (question !== 'self') {
+      await questThreeSpeak(npc, 'Erst du! Was machst du hier?', 'Сначала ты! Что ты здесь делаешь?', {
+        intent: 'thinking',
+      });
+      return;
+    }
+
+    questThreeState.gretaAwaitingSelfAnswer = false;
+    renderQuestThreeChips(npc);
+    await questThreeSpeak(npc, 'Ah, neu hier. Gut! Frag weiter.', 'А, ты здесь новый. Хорошо! Спрашивай дальше.', {
+      intent: 'happy',
+    });
+    return;
+  }
+
+  if (question === 'greeting') {
+    await questThreeSpeak(npc, 'Hallo!', 'Привет!', { intent: 'greeting' });
+    return;
+  }
+
+  if (question === 'age') {
+    await questThreeSpeak(npc, definition.answers.age, 'Любопытно, но Dorfbuch это поле не заполняет.', {
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  if (!['name', 'job', 'lives'].includes(question)) {
+    await questThreeSpeak(npc, 'Hm? Ich verstehe nicht. Frag: Wer? Was? Wo?', 'Хм? Не понимаю. Спроси: Wer? Was? Wo?', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  const alreadyKnown = questThreeState.slots[npc.id]?.[question];
+
+  if (alreadyKnown) {
+    await questThreeSpeak(
+      npc,
+      `Das habe ich doch gesagt! ${definition.answers[question]}`,
+      'Это уже записано в Dorfbuch.',
+      { intent: 'thinking' },
+    );
+    return;
+  }
+
+  fillQuestThreeSlot(npc, question);
+
+  if (npc.id === 'muellerin_greta' && question === 'name') {
+    questThreeState.gretaAwaitingSelfAnswer = true;
+  }
+
+  await questThreeSpeak(npc, definition.answers[question], '', { intent: question === 'name' ? 'greeting' : 'talk' });
+
+  if (questThreeState.readyForBerta) {
+    await questThreeSpeak(npc, 'Drei Nachbarn! Geh zurück zu Berta.', 'Три соседа! Вернись к Берте.', {
+      append: false,
+      intent: 'happy',
+    });
+  }
+}
+
+async function finishQuestThreeWithBerta(npc) {
+  if (!npc || !questThreeState.readyForBerta || questThreeState.bertaRewarded) {
+    return false;
+  }
+
+  questThreeState.bertaRewarded = true;
+  questThreeState.readyForBerta = false;
+  questThreeState.completed = true;
+  renderDorfbuch();
+  renderGasthausChips();
+  await gasthausSpeak(
+    npc,
+    `Drei Freunde an einem Tag! Nicht schlecht, ${questState.playerName || 'Gast'}! Hier - ein Brief vom Bürgermeister.`,
+    'Три друга за один день! Неплохо! Вот письмо от бургомистра.',
+    { intent: 'happy' },
+  );
+  setQuestStatus('Блок A1.1 завершён');
+  return true;
+}
+
+function configureStaticModel(root) {
+  root.traverse((object) => {
+    if (!object.isMesh) {
+      return;
+    }
+
+    object.castShadow = false;
+    object.receiveShadow = true;
+    object.frustumCulled = false;
+  });
+}
+
+function normalizeGasthausModel(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+
+  if (box.isEmpty()) {
+    return;
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  const maxSize = Math.max(size.x, size.z, 0.001);
+  model.scale.multiplyScalar(10.8 / maxSize);
+  model.updateMatrixWorld(true);
+
+  const fitted = new THREE.Box3().setFromObject(model);
+  const center = fitted.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= fitted.min.y;
+}
+
+function createGasthausTextLabel(text, options = {}) {
+  const canvasLabel = document.createElement('canvas');
+  canvasLabel.width = 512;
+  canvasLabel.height = 160;
+  const context = canvasLabel.getContext('2d');
+  context.fillStyle = options.background || 'rgba(20, 28, 22, 0.88)';
+  context.fillRect(0, 0, canvasLabel.width, canvasLabel.height);
+  context.strokeStyle = options.border || '#d8b15e';
+  context.lineWidth = 10;
+  context.strokeRect(8, 8, canvasLabel.width - 16, canvasLabel.height - 16);
+  context.fillStyle = options.color || '#fff8d8';
+  context.font = `${options.weight || 800} ${options.size || 46}px system-ui, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(text, canvasLabel.width / 2, canvasLabel.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvasLabel);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.DoubleSide,
+    transparent: true,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(options.width || 2.4, options.height || 0.75), material);
+  mesh.name = `Label_${text.replace(/\s+/g, '_')}`;
+  return mesh;
+}
+
+function makeGasthausBox(name, position, size, color, action = '') {
+  const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.72,
+    metalness: 0.05,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = name;
+  mesh.position.copy(position);
+
+  if (action) {
+    mesh.userData.gasthausAction = action;
+  }
+
+  return mesh;
+}
+
+function createGasthausFloor() {
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(13, 14),
+    new THREE.MeshBasicMaterial({
+      color: 0x6d4a2e,
+      opacity: 0.02,
+      side: THREE.DoubleSide,
+      transparent: true,
+    }),
+  );
+  floor.name = 'Gasthaus_Click_Floor';
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0.01;
+  floor.userData.gasthausFloor = true;
+  return floor;
+}
+
+function buildGasthausOverlay(root) {
+  root.add(createGasthausFloor());
+
+  const counter = makeGasthausBox(
+    'Gasthaus_Counter',
+    new THREE.Vector3(-1.8, 0.55, -3.45),
+    new THREE.Vector3(3.8, 1.1, 0.65),
+    0x6d3f21,
+    'wallet',
+  );
+  root.add(counter);
+
+  const menu = makeGasthausBox(
+    'Gasthaus_Menu',
+    new THREE.Vector3(-3.85, 1.25, -2.95),
+    new THREE.Vector3(0.08, 1.2, 1.0),
+    0x26332d,
+    'menu',
+  );
+  root.add(menu);
+
+  const menuLabel = createGasthausTextLabel('Brot 2 | Suppe 3 | Bier 4', { width: 2.5, height: 0.45, size: 30 });
+  menuLabel.position.set(-3.9, 1.55, -2.95);
+  menuLabel.rotation.y = Math.PI / 2;
+  menuLabel.userData.gasthausAction = 'menu';
+  root.add(menuLabel);
+
+  const sign = createGasthausTextLabel('Gasthaus Grünbach', { width: 3.0, height: 0.55, size: 40 });
+  sign.position.set(0, 2.5, 5.95);
+  sign.rotation.y = Math.PI;
+  root.add(sign);
+
+  for (const item of GASTHAUS_DOOR_TARGETS) {
+    const door = makeGasthausBox(
+      `Gasthaus_${item.id}`,
+      item.position.clone().add(new THREE.Vector3(0, 0.85, 0)),
+      new THREE.Vector3(1.2, 1.7, 0.16),
+      item.word === 'drei' ? 0x3f6e55 : 0x4a3525,
+      `room:${item.word}`,
+    );
+    root.add(door);
+
+    const label = createGasthausTextLabel(item.word, { width: 0.9, height: 0.32, size: 34 });
+    label.position.copy(item.position).add(new THREE.Vector3(0, 1.75, 0.1));
+    label.userData.gasthausAction = `room:${item.word}`;
+    root.add(label);
+  }
+
+  const tableA = makeGasthausBox(
+    'Gasthaus_Table_A',
+    new THREE.Vector3(2.25, 0.42, -0.55),
+    new THREE.Vector3(1.65, 0.22, 1.1),
+    0x6a482a,
+  );
+  root.add(tableA);
+
+  const tableB = makeGasthausBox(
+    'Gasthaus_Table_B',
+    new THREE.Vector3(2.4, 0.42, 2.35),
+    new THREE.Vector3(1.4, 0.22, 1.0),
+    0x6a482a,
+  );
+  root.add(tableB);
+
+  const stairs = makeGasthausBox(
+    'Gasthaus_Stairs',
+    new THREE.Vector3(4.55, 0.55, -3.2),
+    new THREE.Vector3(1.15, 1.1, 2.2),
+    0x5b3825,
+  );
+  stairs.rotation.y = -0.35;
+  root.add(stairs);
+}
+
+function createGasthausNpcVisual(color) {
+  const group = new THREE.Group();
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.8 });
+  const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd7b08a, roughness: 0.68 });
+  const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2528, roughness: 0.72 });
+
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.9, 14), bodyMaterial);
+  body.position.y = 0.82;
+  group.add(body);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 18, 14), skinMaterial);
+  head.position.y = 1.42;
+  group.add(head);
+
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.235, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2), darkMaterial);
+  hair.position.y = 1.52;
+  group.add(hair);
+
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.52, 6, 10), skinMaterial);
+    arm.position.set(side * 0.35, 0.92, 0.02);
+    arm.rotation.z = side * 0.22;
+    group.add(arm);
+
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.62, 6, 10), darkMaterial);
+    leg.position.set(side * 0.11, 0.3, 0);
+    group.add(leg);
+  }
+
+  return group;
+}
+
+function createGasthausNpc(definition) {
+  if (getNpcById(definition.id)) {
+    return getNpcById(definition.id);
+  }
+
+  const root = new THREE.Group();
+  root.name = definition.id;
+  root.position.copy(definition.position);
+  root.rotation.y = definition.yaw || 0;
+
+  const visual = createGasthausNpcVisual(definition.color || 0x6b7ba8);
+  root.add(visual);
+
+  const npc = {
+    id: definition.id,
+    label: definition.label,
+    role: definition.role,
+    aliases: definition.aliases,
+    voiceId: ELEVENLABS_VOICES.bella,
+    location: LOCATION_GASTHAUS,
+    root,
+    visual,
+    model: visual,
+    mixer: null,
+    mouth: null,
+    embeddedAnimationNames: [],
+    idleAnimationName: null,
+    currentAction: null,
+    currentAnimationName: null,
+    path: [],
+    pathIndex: 0,
+    waitTimer: 999,
+    repathTimer: 0,
+    speed: 0,
+    state: 'idle',
+    dialogue: [],
+    talkUntil: 0,
+    afterTalk: null,
+    marker: null,
+    target: null,
+    groundBiasY: 0,
+    groundBiasDirty: false,
+    useProceduralIdle: true,
+    proceduralPhase: Math.random() * Math.PI * 2,
+    proceduralBones: {},
+    scriptedMovement: false,
+    turnTargetYaw: null,
+    finalYaw: null,
+    stationary: true,
+  };
+
+  npc.target = createNpcTargetFromNpc(npc);
+  markNpcObjectTree(npc);
+  gasthausRoot.add(root);
+  npcById.set(npc.id, npc);
+  npcs.push(npc);
+  return npc;
+}
+
+function createQuestThreeNpc(definition) {
+  if (getNpcById(definition.id) || !npcContainer) {
+    return getNpcById(definition.id);
+  }
+
+  const root = new THREE.Group();
+  root.name = definition.id;
+  root.position.copy(snapToNpcGround(definition.position));
+  root.rotation.y = definition.yaw || angleToAgent(root.position);
+
+  const visual = createGasthausNpcVisual(definition.color || 0x72859b);
+  root.add(visual);
+
+  const npc = {
+    id: definition.id,
+    label: definition.label,
+    role: definition.role,
+    aliases: definition.aliases,
+    voiceId: definition.id === 'lehrerin_ida' ? ELEVENLABS_VOICES.rachel : ELEVENLABS_VOICES.josh,
+    location: LOCATION_VILLAGE,
+    questId: QUEST_THREE_ID,
+    facts: definition.facts,
+    root,
+    visual,
+    model: visual,
+    mixer: null,
+    mouth: null,
+    embeddedAnimationNames: [],
+    idleAnimationName: null,
+    currentAction: null,
+    currentAnimationName: null,
+    path: [],
+    pathIndex: 0,
+    waitTimer: definition.patrolPoints?.length ? 0.5 : 999,
+    repathTimer: 0,
+    speed: definition.patrolPoints?.length ? 0.9 : 0,
+    state: 'idle',
+    dialogue: [],
+    talkUntil: 0,
+    afterTalk: null,
+    marker: null,
+    target: null,
+    groundBiasY: 0,
+    groundBiasDirty: false,
+    useProceduralIdle: true,
+    proceduralPhase: Math.random() * Math.PI * 2,
+    proceduralBones: {},
+    scriptedMovement: false,
+    turnTargetYaw: null,
+    finalYaw: null,
+    stationary: !definition.patrolPoints?.length,
+    patrolPoints: definition.patrolPoints || [],
+    homeTargetIds: [],
+  };
+
+  npc.target = createNpcTargetFromNpc(npc);
+  markNpcObjectTree(npc);
+  npcContainer.add(root);
+  npcById.set(npc.id, npc);
+  npcs.push(npc);
+  syncNpcTarget(npc);
+  return npc;
+}
+
+function ensureQuestThreeNpcs() {
+  if (!navigation || !questThreeState.unlocked) {
+    return;
+  }
+
+  for (const definition of QUEST_THREE_NPCS) {
+    createQuestThreeNpc(definition);
+  }
+
+  syncAllNpcTargets();
+  renderTargets();
+  renderDorfbuch();
+  publishDebugState();
+}
+
+function createGasthausFallbackInterior() {
+  const group = new THREE.Group();
+  group.name = 'Gasthaus_Fallback_Interior';
+
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x4c3423, roughness: 0.82 });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(12, 0.12, 13), floorMaterial);
+  floor.position.y = -0.06;
+  group.add(floor);
+
+  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xd8d0bd, roughness: 0.85 });
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(12, 2.8, 0.18), wallMaterial);
+  backWall.position.set(0, 1.4, -6.3);
+  group.add(backWall);
+
+  const frontWall = new THREE.Mesh(new THREE.BoxGeometry(12, 2.8, 0.18), wallMaterial);
+  frontWall.position.set(0, 1.4, 6.4);
+  group.add(frontWall);
+
+  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.8, 13), wallMaterial);
+  leftWall.position.set(-6.05, 1.4, 0);
+  group.add(leftWall);
+
+  const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.8, 13), wallMaterial);
+  rightWall.position.set(6.05, 1.4, 0);
+  group.add(rightWall);
+
+  return group;
+}
+
+async function ensureGasthausLoaded() {
+  if (locationState.gasthausLoaded && gasthausRoot) {
+    return;
+  }
+
+  gasthausRoot = gasthausRoot || new THREE.Group();
+  gasthausRoot.name = 'Gasthaus_Grunbach_Location';
+  gasthausRoot.visible = false;
+
+  if (!gasthausRoot.parent) {
+    scene.add(gasthausRoot);
+  }
+
+  if (!gasthausModel) {
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
+
+    try {
+      const gltf = await loadGltf(loader, GASTHAUS_INTERIOR_URL);
+      gasthausModel = gltf.scene;
+      gasthausModel.name = 'Gasthaus_Interior_Model';
+      configureStaticModel(gasthausModel);
+      normalizeGasthausModel(gasthausModel);
+      gasthausRoot.add(gasthausModel);
+    } catch (error) {
+      console.warn('Gasthaus interior failed, using fallback:', error);
+      gasthausModel = createGasthausFallbackInterior();
+      gasthausRoot.add(gasthausModel);
+    }
+  }
+
+  if (!gasthausRoot.getObjectByName('Gasthaus_Click_Floor')) {
+    buildGasthausOverlay(gasthausRoot);
+  }
+
+  for (const npcDef of GASTHAUS_NPCS) {
+    createGasthausNpc(npcDef);
+  }
+
+  locationState.gasthausLoaded = true;
+}
+
+function setVillageVisibility(visible) {
+  if (cityRoot) {
+    cityRoot.visible = visible;
+  }
+
+  npcContainer.visible = visible;
+  navAreaBlockMarkers.visible = visible;
+
+  if (navigation?.debugMesh) {
+    navigation.debugMesh.visible = visible && toggleNavmesh.checked;
+  }
+
+  if (navigation?.pathLine) {
+    navigation.pathLine.visible = visible;
+  }
+}
+
+function setGasthausVisibility(visible) {
+  if (gasthausRoot) {
+    gasthausRoot.visible = visible;
+  }
+}
+
+function setLocation(location) {
+  locationState.current = location;
+  setVillageVisibility(location === LOCATION_VILLAGE);
+  setGasthausVisibility(location === LOCATION_GASTHAUS);
+  targetMarkers.visible = toggleTargets.checked;
+  selectedNpc = null;
+  nearbyNpc = null;
+  agent.path = [];
+  agent.pathIndex = 0;
+  agent.pendingAction = null;
+  agent.pendingNpcAction = null;
+  agent.pendingArrivalPoint = null;
+  renderTargets();
+  renderDialogue();
+  updateLocationHud();
+  publishDebugState();
+}
+
+async function enterGasthaus() {
+  if (locationState.current === LOCATION_GASTHAUS || locationState.transitioning) {
+    return;
+  }
+
+  await runTransition('Gasthaus Grünbach', async () => {
+    await ensureGasthausLoaded();
+    setLocation(LOCATION_GASTHAUS);
+    agent.position.copy(GASTHAUS_PLAYER_SPAWN);
+    agent.yaw = Math.PI;
+    lookYaw = Math.PI;
+    lookPitch = -0.05;
+    gasthausSetStatus('познакомьтесь с Frau Berta');
+    renderGasthausChips();
+  });
+
+  if (!locationState.gasthausPrompted) {
+    locationState.gasthausPrompted = true;
+    await openGasthausQuestDialogue();
+  }
+}
+
+async function leaveGasthaus() {
+  if (locationState.current !== LOCATION_GASTHAUS || locationState.transitioning) {
+    return;
+  }
+
+  await runTransition('Dorf Grünbach', async () => {
+    setFeaturePanel(walletPanel, false);
+    setFeaturePanel(dorfbuchPanel, false);
+    setLocation(LOCATION_VILLAGE);
+    agent.position.copy(snapToNpcGround(GASTHAUS_RETURN_POINT));
+    lookYaw = Math.atan2(GASTHAUS_DOOR_POINT.x - agent.position.x, GASTHAUS_DOOR_POINT.z - agent.position.z);
+    lookPitch = -0.08;
+    agent.yaw = lookYaw;
+    if (questThreeState.readyForBerta) {
+      setQuestThreeStatus('вернитесь к Berta вечером');
+    } else if (questThreeState.unlocked && !questThreeState.completed) {
+      setQuestThreeStatus('заполните Dorfbuch');
+    } else {
+      setQuestStatus(gasthausQuest.completed ? 'Квест выполнен: Das Gasthaus' : 'Квест: Der Wachmann');
+    }
+  });
+}
+
+function clampGasthausPoint(point) {
+  return new THREE.Vector3(
+    THREE.MathUtils.clamp(point.x, GASTHAUS_BOUNDS.minX, GASTHAUS_BOUNDS.maxX),
+    GASTHAUS_BOUNDS.y,
+    THREE.MathUtils.clamp(point.z, GASTHAUS_BOUNDS.minZ, GASTHAUS_BOUNDS.maxZ),
+  );
+}
+
+function moveDirectlyToPoint(point, pendingAction = null, pendingNpcAction = null) {
+  const destination = clampGasthausPoint(point);
+
+  if (agent.position.distanceToSquared(destination) < 0.16) {
+    finishArrival(pendingAction, destination, pendingNpcAction);
+    return;
+  }
+
+  agent.path = [agent.position.clone(), destination];
+  agent.pathIndex = 1;
+  agent.pendingAction = pendingAction;
+  agent.pendingNpcAction = pendingNpcAction;
+  agent.pendingArrivalPoint = destination.clone();
+  setStatus('Иду по Gasthaus', 'ready');
+}
+
+function findGasthausAction(object) {
+  let current = object;
+
+  while (current) {
+    if (current.userData?.gasthausAction) {
+      return current.userData.gasthausAction;
+    }
+
+    current = current.parent;
+  }
+
+  return '';
+}
+
+function handleGasthausAction(action) {
+  if (!action) {
+    return false;
+  }
+
+  if (action === 'wallet') {
+    openWalletPanel();
+    return true;
+  }
+
+  if (action === 'menu') {
+    gasthausQuest.menuRead = true;
+    renderDorfbuch();
+    setStatus('Menü: Brot 2, Suppe 3, Bier 4', 'ready');
+    return true;
+  }
+
+  if (action.startsWith('room:')) {
+    handleGasthausRoom(action.slice(5));
+    return true;
+  }
+
+  return false;
+}
+
+function handleGasthausCanvasClick(event) {
+  if (!gasthausRoot || isUiTarget(event.target)) {
+    return;
+  }
+
+  updatePointer(event);
+  raycaster.setFromCamera(pointer, camera);
+
+  const npcHits = raycaster.intersectObjects(
+    npcs.filter((npc) => isGasthausNpc(npc)).map((npc) => npc.root),
+    true,
+  );
+
+  if (npcHits.length) {
+    const npc = getNpcFromObject(npcHits[0].object);
+
+    if (npc) {
+      setSelectedNpc(npc);
+      moveDirectlyToPoint(getNpcApproachPoint(npc), null, `talk:${npc.id}`);
+      return;
+    }
+  }
+
+  const hits = raycaster.intersectObject(gasthausRoot, true);
+
+  if (!hits.length) {
+    return;
+  }
+
+  const action = findGasthausAction(hits[0].object);
+
+  if (action) {
+    const point = hits[0].point.clone();
+    moveDirectlyToPoint(point, action, null);
+    return;
+  }
+
+  moveDirectlyToPoint(hits[0].point);
+}
+
+function updateLocationTriggers() {
+  if (
+    locationState.current !== LOCATION_VILLAGE ||
+    locationState.transitioning ||
+    isPlayerHeldByGuard() ||
+    !questState.completed
+  ) {
+    return;
+  }
+
+  if (agent.position.distanceToSquared(GASTHAUS_DOOR_POINT) <= 2.3 * 2.3) {
+    enterGasthaus();
+  }
 }
 
 function loadDeletedTargetIds() {
@@ -889,7 +2675,7 @@ function inputMentionsNpc(input) {
   const normalized = normalizeText(input);
   const aliases = [
     ...NPC_ALIASES,
-    ...npcs.flatMap((npc) => [npc.id, npc.label, ...(npc.aliases || [])]),
+    ...npcs.filter(isNpcActiveForLocation).flatMap((npc) => [npc.id, npc.label, ...(npc.aliases || [])]),
   ];
 
   return aliases.some((alias) => normalized.includes(normalizeText(alias)));
@@ -923,7 +2709,7 @@ function placeNpcTarget() {
 }
 
 function getNpcTarget() {
-  const npc = selectedNpc || nearbyNpc || getNearestNpc() || npcs[0] || null;
+  const npc = selectedNpc || nearbyNpc || getNearestNpc() || npcs.find(isNpcActiveForLocation) || null;
   npcTarget = npc?.target || null;
   return npcTarget;
 }
@@ -1298,6 +3084,10 @@ function getNpcApproachPoint(npc) {
         NPC_APPROACH_DISTANCE,
       ),
     );
+  }
+
+  if (npc.location === LOCATION_GASTHAUS) {
+    return clampGasthausPoint(candidates[0] || center);
   }
 
   for (const candidate of candidates) {
@@ -1940,6 +3730,10 @@ async function loadNpcCharactersAndAnimations() {
     selectedNpc = npcs[0];
   }
 
+  if (questThreeState.unlocked) {
+    ensureQuestThreeNpcs();
+  }
+
   syncAllNpcTargets();
   renderTargets();
   renderDialogue();
@@ -1961,6 +3755,10 @@ function getRandomPatrolCandidate(npc) {
       candidates.push(candidate);
     }
   };
+
+  for (const point of npc.patrolPoints || []) {
+    addCandidate(point);
+  }
 
   for (const targetId of npc.homeTargetIds || []) {
     addCandidate(routePointForTargetId(targetId));
@@ -2187,6 +3985,10 @@ function updateNpcs(deltaTime) {
   const now = performance.now() / 1000;
 
   for (const npc of npcs) {
+    if (!isNpcActiveForLocation(npc)) {
+      continue;
+    }
+
     npc.mixer?.update(deltaTime);
 
     if (npc.groundBiasDirty) {
@@ -2307,7 +4109,35 @@ function renderQuestChips(chips = []) {
       }
 
       if (chip.action === 'help') {
+        if (isGasthausNpc(selectedNpc)) {
+          showGasthausHelp();
+          return;
+        }
+
+        if (isQuestThreeNpc(selectedNpc)) {
+          renderQuestThreeChips(selectedNpc);
+          questThreeSpeak(selectedNpc, 'Frag: Wer bist du? Was machst du? Wo wohnst du?', 'Спроси: кто ты? что делаешь? где живёшь?', {
+            intent: 'helpful',
+          });
+          return;
+        }
+
         showQuestHelp();
+        return;
+      }
+
+      if (chip.action === 'open-wallet') {
+        openWalletPanel();
+        return;
+      }
+
+      if (chip.action === 'open-dorfbuch') {
+        openDorfbuchPanel();
+        return;
+      }
+
+      if (chip.action === 'room') {
+        handleGasthausRoom(chip.room);
       }
     });
     questChips.append(button);
@@ -2468,6 +4298,32 @@ function openQuestDialogue(npc = getQuestGuard()) {
 }
 
 function repeatQuestPrompt() {
+  if (isQuestThreeNpc(selectedNpc)) {
+    const npc = selectedNpc;
+
+    if (questState.currentLine) {
+      questThreeSpeak(npc, questState.currentLine.de, questState.currentLine.ru, {
+        append: false,
+        intent: 'thinking',
+      });
+    }
+
+    return;
+  }
+
+  if (isGasthausNpc(selectedNpc)) {
+    const npc = selectedNpc;
+
+    if (questState.currentLine) {
+      gasthausSpeak(npc, questState.currentLine.de, questState.currentLine.ru, {
+        append: false,
+        intent: 'thinking',
+      });
+    }
+
+    return;
+  }
+
   const npc = getQuestGuard();
 
   if (!npc || !questState.currentLine) {
@@ -2513,7 +4369,7 @@ function finishQuestSuccess(npc) {
   npc.afterTalk = () => {
     startQuestGuardOpenMove(npc);
   };
-  speakQuestLine(npc, 'Komm rein!', 'Заходи!', { intent: 'happy' });
+  speakQuestLine(npc, 'Komm rein! Müde? Geh ins Gasthaus.', 'Заходи! Устал? Иди в гостиницу.', { intent: 'happy' });
 }
 
 function handleQuestClarify(npc, helpStage) {
@@ -2619,7 +4475,7 @@ async function sendQuestDialogueToGuard(npc, message) {
 // The player is "held" from the moment Bruno halts them until the quest is
 // finished. While held they cannot walk away or slip past the gate.
 function isPlayerHeldByGuard() {
-  return QUEST_ENABLED && questState.halted && !questState.completed;
+  return locationState.current === LOCATION_VILLAGE && QUEST_ENABLED && questState.halted && !questState.completed;
 }
 
 const GUARD_GREETINGS = {
@@ -2677,7 +4533,7 @@ function holdPlayerAtGuard(npc) {
 function updateQuest() {
   const npc = getQuestGuard();
 
-  if (!QUEST_ENABLED || !npc || questState.completed) {
+  if (locationState.current !== LOCATION_VILLAGE || !QUEST_ENABLED || !npc || questState.completed) {
     return;
   }
 
@@ -2713,6 +4569,10 @@ function getNearestNpc(maxDistance = Infinity) {
   let bestDistanceSq = maxDistance * maxDistance;
 
   for (const npc of npcs) {
+    if (!isNpcActiveForLocation(npc)) {
+      continue;
+    }
+
     const distanceSq = npc.root.position.distanceToSquared(agent.position);
 
     if (distanceSq < bestDistanceSq) {
@@ -2730,6 +4590,10 @@ function findNpcInText(input) {
   let bestScore = 0;
 
   for (const npc of npcs) {
+    if (!isNpcActiveForLocation(npc)) {
+      continue;
+    }
+
     const aliases = [npc.id, npc.label, ...(npc.aliases || [])];
 
     for (const alias of aliases) {
@@ -2765,12 +4629,22 @@ function renderDialogueHeader() {
 
   const target = selectedNpc || nearbyNpc;
 
-  if (isQuestGuard(target) && questState.currentLine && !questState.completed) {
+  if (
+    ((isQuestGuard(target) && !questState.completed) || isGasthausNpc(target) || isQuestThreeNpc(target)) &&
+    questState.currentLine
+  ) {
     renderQuestSpeechLine();
     interactNpcButton.disabled = false;
     dialogueInput.disabled = false;
     dialogueSubmit.disabled = false;
     return;
+  }
+
+  const keepsQuestChips =
+    (isQuestGuard(target) && !questState.completed) || isGasthausNpc(target) || isQuestThreeNpc(target);
+
+  if (!keepsQuestChips) {
+    renderQuestChips([]);
   }
 
   dialogueTarget.classList.remove('quest-line');
@@ -2875,6 +4749,29 @@ function openDialogueWithNpc(npc, options = {}) {
     return;
   }
 
+  if (isGasthausNpc(npc) && locationState.current === LOCATION_GASTHAUS) {
+    if (npc.id === 'frau_berta') {
+      openGasthausQuestDialogue();
+      return;
+    }
+
+    setSelectedNpc(npc, options);
+    renderQuestChips([
+      { label: 'Ja', submit: 'Ja' },
+      { label: 'Nein', submit: 'Nein' },
+      { label: 'Prost!', submit: 'Prost!' },
+    ]);
+    gasthausSpeak(npc, 'Hallo! Schönes Dorf, ja?', 'Привет! Красивая деревня, да?', {
+      intent: 'greeting',
+    });
+    return;
+  }
+
+  if (isQuestThreeNpc(npc) && locationState.current === LOCATION_VILLAGE && questThreeState.unlocked) {
+    openQuestThreeDialogue(npc);
+    return;
+  }
+
   setSelectedNpc(npc, options);
   npc.path = [];
   npc.pathIndex = 0;
@@ -2932,6 +4829,16 @@ async function sendDialogueToNpc(npc, message) {
   // follow-up questions in character.
   if (isQuestGuard(npc) && !questState.completed) {
     sendQuestDialogueToGuard(npc, line);
+    return;
+  }
+
+  if (isGasthausNpc(npc) && locationState.current === LOCATION_GASTHAUS) {
+    sendGasthausDialogueToNpc(npc, line);
+    return;
+  }
+
+  if (isQuestThreeNpc(npc) && locationState.current === LOCATION_VILLAGE && questThreeState.unlocked) {
+    sendQuestThreeDialogueToNpc(npc, line);
     return;
   }
 
@@ -3017,6 +4924,9 @@ function submitDialogueLine() {
 // Safari, Edge) rather than only those with the Web Speech API. The recognised
 // text lands in the dialogue line and is submitted through the normal pipeline,
 // so the guard FSM (or the AI) evaluates it and advances or asks to repeat.
+const MIC_MIN_AUDIBLE_LEVEL = 0.012;
+const MIC_WARN_LEVEL = 0.025;
+
 const dictation = {
   supported:
     typeof navigator !== 'undefined' &&
@@ -3027,6 +4937,16 @@ const dictation = {
   recorder: null,
   stream: null,
   chunks: [],
+  selectedDeviceId: '',
+  inputDevices: [],
+  audioContext: null,
+  audioSource: null,
+  analyser: null,
+  levelData: null,
+  levelTimer: null,
+  maxInputLevel: 0,
+  warnedQuietInput: false,
+  recordingStartedAt: 0,
 };
 
 function pickAudioMimeType() {
@@ -3074,6 +4994,152 @@ function setMicTranscript(message, state = 'ready') {
   micTranscript.classList.toggle('error', state === 'error');
 }
 
+function setMicLevel(level) {
+  const clamped = Math.max(0, Math.min(1, Number(level) || 0));
+
+  if (micMeter) {
+    micMeter.hidden = dictation.state !== 'recording' && clamped <= 0;
+  }
+
+  if (micMeterBar) {
+    micMeterBar.style.setProperty('--mic-level', `${Math.round(clamped * 100)}%`);
+  }
+}
+
+function getSelectedMicLabel() {
+  const selected = dictation.inputDevices.find((device) => device.deviceId === dictation.selectedDeviceId);
+  return selected?.label || micDeviceSelect?.selectedOptions?.[0]?.textContent || '';
+}
+
+async function refreshMicDevices() {
+  if (!micDeviceSelect || !navigator.mediaDevices?.enumerateDevices) {
+    return;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => device.kind === 'audioinput');
+    dictation.inputDevices = inputs;
+    micDeviceSelect.replaceChildren();
+
+    if (inputs.length <= 1) {
+      micDeviceSelect.hidden = true;
+      return;
+    }
+
+    for (let index = 0; index < inputs.length; index += 1) {
+      const device = inputs[index];
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `Микрофон ${index + 1}`;
+      micDeviceSelect.append(option);
+    }
+
+    const hasSelected = inputs.some((device) => device.deviceId === dictation.selectedDeviceId);
+    if (!hasSelected) {
+      dictation.selectedDeviceId = inputs[0]?.deviceId || '';
+    }
+
+    micDeviceSelect.value = dictation.selectedDeviceId;
+    micDeviceSelect.hidden = false;
+  } catch (error) {
+    console.warn('Could not enumerate microphones:', error);
+  }
+}
+
+function getMicConstraints() {
+  const audio = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+
+  if (dictation.selectedDeviceId) {
+    audio.deviceId = { exact: dictation.selectedDeviceId };
+  }
+
+  return { audio };
+}
+
+function stopMicMonitor() {
+  if (dictation.levelTimer) {
+    clearInterval(dictation.levelTimer);
+    dictation.levelTimer = null;
+  }
+
+  dictation.audioSource?.disconnect?.();
+  dictation.audioSource = null;
+  dictation.analyser = null;
+  dictation.levelData = null;
+
+  if (dictation.audioContext?.state !== 'closed') {
+    dictation.audioContext?.close?.().catch(() => {});
+  }
+
+  dictation.audioContext = null;
+  setMicLevel(0);
+}
+
+async function startMicMonitor(stream) {
+  stopMicMonitor();
+  dictation.maxInputLevel = 0;
+  dictation.warnedQuietInput = false;
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    return;
+  }
+
+  try {
+    const context = new AudioContextClass();
+    const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+
+    if (context.state === 'suspended') {
+      await context.resume().catch(() => {});
+    }
+
+    dictation.audioContext = context;
+    dictation.audioSource = source;
+    dictation.analyser = analyser;
+    dictation.levelData = new Uint8Array(analyser.fftSize);
+
+    dictation.levelTimer = setInterval(() => {
+      analyser.getByteTimeDomainData(dictation.levelData);
+
+      let sum = 0;
+      let peak = 0;
+
+      for (let index = 0; index < dictation.levelData.length; index += 1) {
+        const value = (dictation.levelData[index] - 128) / 128;
+        sum += value * value;
+        peak = Math.max(peak, Math.abs(value));
+      }
+
+      const rms = Math.sqrt(sum / dictation.levelData.length);
+      const level = Math.max(rms * 4, peak * 0.7);
+      dictation.maxInputLevel = Math.max(dictation.maxInputLevel, rms, peak * 0.35);
+      setMicLevel(level);
+
+      if (!dictation.warnedQuietInput && performance.now() - dictation.recordingStartedAt > 1300 && dictation.maxInputLevel < MIC_WARN_LEVEL) {
+        dictation.warnedQuietInput = true;
+        const label = getSelectedMicLabel();
+        setMicTranscript(
+          label
+            ? `Микрофон почти молчит (${label}). Проверьте выбранный вход или говорите ближе.`
+            : 'Микрофон почти молчит. Проверьте выбранный вход или говорите ближе.',
+          'error',
+        );
+      }
+    }, 120);
+  } catch (error) {
+    console.warn('Could not start microphone level meter:', error);
+  }
+}
+
 function stopMicStream() {
   if (dictation.stream) {
     for (const track of dictation.stream.getTracks()) {
@@ -3082,6 +5148,8 @@ function stopMicStream() {
 
     dictation.stream = null;
   }
+
+  stopMicMonitor();
 }
 
 async function transcribeRecording(blob, mimeType) {
@@ -3154,7 +5222,19 @@ async function startDictation() {
   requestGameAudioUnlock();
 
   try {
-    dictation.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    try {
+      dictation.stream = await navigator.mediaDevices.getUserMedia(getMicConstraints());
+    } catch (error) {
+      if (!dictation.selectedDeviceId) {
+        throw error;
+      }
+
+      dictation.selectedDeviceId = '';
+      micDeviceSelect && (micDeviceSelect.value = '');
+      dictation.stream = await navigator.mediaDevices.getUserMedia(getMicConstraints());
+    }
+
+    await refreshMicDevices();
   } catch (error) {
     setMicTranscript('Доступ к микрофону запрещен. Разрешите его в браузере.', 'error');
     setStatus('Доступ к микрофону запрещён. Разрешите его в браузере.', 'error');
@@ -3167,6 +5247,9 @@ async function startDictation() {
     : new MediaRecorder(dictation.stream);
   dictation.recorder = recorder;
   dictation.chunks = [];
+  dictation.maxInputLevel = 0;
+  dictation.recordingStartedAt = performance.now();
+  await startMicMonitor(dictation.stream);
 
   recorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) {
@@ -3175,6 +5258,7 @@ async function startDictation() {
   };
 
   recorder.onstop = async () => {
+    const maxInputLevel = dictation.maxInputLevel;
     stopMicStream();
     const type = recorder.mimeType || mimeType || 'audio/webm';
     const blob = new Blob(dictation.chunks, { type });
@@ -3186,6 +5270,20 @@ async function startDictation() {
       updateMicButton();
       setMicTranscript('Слишком коротко: нажмите 🎤 и скажите фразу целиком.', 'error');
       setStatus('Слишком коротко. Нажмите 🎤 и говорите.', 'error');
+      return;
+    }
+
+    if (maxInputLevel < MIC_MIN_AUDIBLE_LEVEL) {
+      dictation.state = 'idle';
+      updateMicButton();
+      const label = getSelectedMicLabel();
+      setMicTranscript(
+        label
+          ? `Микрофон не слышит речь (${label}). Выберите другой микрофон или проверьте разрешение в браузере.`
+          : 'Микрофон не слышит речь. Проверьте выбранный микрофон в браузере/системе и повторите.',
+        'error',
+      );
+      setStatus('Микрофон не слышит речь. Проверьте вход и повторите.', 'error');
       return;
     }
 
@@ -3300,8 +5398,11 @@ function getNavKind(object) {
 }
 
 function resize() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  const viewport = window.visualViewport;
+  const width = Math.max(320, Math.floor(viewport?.width || window.innerWidth));
+  const height = Math.max(320, Math.floor(viewport?.height || window.innerHeight));
+
+  document.documentElement.style.setProperty('--app-height', `${height}px`);
 
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -3402,19 +5503,23 @@ function renderTargets() {
   targetMarkers.clear();
   targetList.replaceChildren();
 
-  if (!registry) {
+  if (!registry && locationState.current === LOCATION_VILLAGE) {
     return;
   }
 
-  for (const target of registry.targets) {
-    if (target.routePoint || target.approachPoint || target.center) {
-      targetMarkers.add(createMarker(target));
+  const visibleTargets = [];
+
+  if (locationState.current === LOCATION_VILLAGE && registry) {
+    for (const target of registry.targets) {
+      if (target.routePoint || target.approachPoint || target.center) {
+        targetMarkers.add(createMarker(target));
+      }
     }
+
+    visibleTargets.push(...registry.getVisibleTargets());
   }
 
-  const visibleTargets = [...registry.getVisibleTargets()];
-
-  for (const npc of npcs) {
+  for (const npc of npcs.filter(isNpcActiveForLocation)) {
     syncNpcTarget(npc);
     npc.marker = createMarker(npc.target);
     targetMarkers.add(npc.marker);
@@ -3634,7 +5739,7 @@ function rebuildRegistryFromCustomTargets() {
     return;
   }
 
-  registry = new WorldRegistry(cityRoot, customTargets, deletedTargetIds, {
+  registry = new WorldRegistry(cityRoot, getRegistryCustomTargets(), deletedTargetIds, {
     includeBuiltInTargets: !QUEST_ENABLED,
     includeSceneTargets: !QUEST_ENABLED,
   });
@@ -3733,6 +5838,15 @@ function finishArrival(action = null, arrivalPoint = null, npcAction = null) {
     agent.position.copy(arrivalPoint);
   }
 
+  if (action === 'enter_gasthaus') {
+    enterGasthaus();
+    return;
+  }
+
+  if (locationState.current === LOCATION_GASTHAUS && handleGasthausAction(action)) {
+    return;
+  }
+
   if (typeof npcAction === 'string' && npcAction.startsWith('talk:')) {
     const npc = getNpcById(npcAction.slice(5));
 
@@ -3790,13 +5904,13 @@ async function rebuildNavigation() {
     navigation.debugMesh.visible = toggleNavmesh.checked;
 
     if (!registry) {
-      registry = new WorldRegistry(cityRoot, customTargets, deletedTargetIds, {
+      registry = new WorldRegistry(cityRoot, getRegistryCustomTargets(), deletedTargetIds, {
         includeBuiltInTargets: !QUEST_ENABLED,
         includeSceneTargets: !QUEST_ENABLED,
       });
     }
 
-    registry.setCustomTargets(customTargets);
+    registry.setCustomTargets(getRegistryCustomTargets());
     registry.setDeletedTargetIds(deletedTargetIds);
     registry.bindNavigation(navigation);
     renderNavAreaBlocks();
@@ -3846,6 +5960,25 @@ function moveToPoint(point, pendingAction = null, arrivalPoint = null, pendingNp
 }
 
 function moveToTarget(target, pendingAction = null, pendingNpcAction = null) {
+  if (!target) {
+    return;
+  }
+
+  if (locationState.current === LOCATION_GASTHAUS) {
+    if (target.source === 'npc') {
+      const npc = getNpcForTargetId(target.id);
+
+      if (npc) {
+        setSelectedNpc(npc);
+        moveDirectlyToPoint(target.routePoint || target.approachPoint || target.center, null, `talk:${npc.id}`);
+        return;
+      }
+    }
+
+    moveDirectlyToPoint(target.routePoint || target.approachPoint || target.center, target.action);
+    return;
+  }
+
   if (target.source === 'npc') {
     const npc = getNpcForTargetId(target.id);
 
@@ -4062,13 +6195,14 @@ function animate() {
 
   updateCharacter(deltaTime);
   updateQuest();
+  updateLocationTriggers();
   updateCamera();
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
 function isUiTarget(target) {
-  return Boolean(target.closest?.('.panel'));
+  return Boolean(target.closest?.('.panel, .location-hud, .transition-overlay'));
 }
 
 function isEditableTarget(target) {
@@ -4082,6 +6216,11 @@ function updatePointer(event) {
 }
 
 function handleCanvasClick(event) {
+  if (locationState.current === LOCATION_GASTHAUS) {
+    handleGasthausCanvasClick(event);
+    return;
+  }
+
   if (!cityRoot || !navigation || isUiTarget(event.target)) {
     return;
   }
@@ -4176,6 +6315,26 @@ function setupInputEvents() {
     updateMicButton();
   }
 
+  if (micDeviceSelect) {
+    micDeviceSelect.addEventListener('change', () => {
+      dictation.selectedDeviceId = micDeviceSelect.value;
+      const label = getSelectedMicLabel();
+      setMicTranscript(label ? `Выбран микрофон: ${label}` : '');
+    });
+
+    refreshMicDevices();
+  }
+
+  navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
+
+  exitLocationButton?.addEventListener('click', leaveGasthaus);
+  dorfbuchOpenButton?.addEventListener('click', openDorfbuchPanel);
+  dorfbuchCloseButton?.addEventListener('click', () => setFeaturePanel(dorfbuchPanel, false));
+  walletOpenButton?.addEventListener('click', openWalletPanel);
+  walletCloseButton?.addEventListener('click', () => setFeaturePanel(walletPanel, false));
+  coinResetButton?.addEventListener('click', resetGasthausCoins);
+  coinPayButton?.addEventListener('click', submitGasthausPayment);
+
   rebuildNavmeshButton.addEventListener('click', rebuildNavigation);
 
   pickTargetButton.addEventListener('click', () => {
@@ -4228,6 +6387,9 @@ function setupInputEvents() {
     requestGameAudioUnlock();
 
     if (event.code === 'Escape') {
+      setFeaturePanel(walletPanel, false);
+      setFeaturePanel(dorfbuchPanel, false);
+
       if (isPickMode) {
         setPickMode(false);
       }
@@ -4326,10 +6488,15 @@ function loadCity() {
 }
 
 window.addEventListener('resize', resize);
+window.visualViewport?.addEventListener('resize', resize);
+window.visualViewport?.addEventListener('scroll', resize);
 resize();
 setupInputEvents();
 cutRadiusValue.value = Number(cutRadiusInput.value || 3).toFixed(1);
 targetMarkers.visible = toggleTargets.checked;
 renderNavAreaBlocks();
+updateLocationHud();
+renderWallet();
+renderDorfbuch();
 loadCity();
 animate();

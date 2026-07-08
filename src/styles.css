@@ -1,4 +1,6 @@
 :root {
+  --app-height: 100vh;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -14,8 +16,9 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: var(--app-height);
   overflow: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 button,
@@ -33,10 +36,11 @@ input {
 }
 
 button {
-  min-height: 36px;
+  min-height: 40px;
   padding: 0 14px;
   border-radius: 6px;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 button:hover,
@@ -47,9 +51,10 @@ select:hover {
 input {
   width: 100%;
   min-width: 0;
-  height: 40px;
+  height: 42px;
   padding: 0 12px;
   border-radius: 6px;
+  font-size: 16px;
   outline: none;
 }
 
@@ -61,12 +66,13 @@ input:focus {
 #app,
 #scene {
   width: 100vw;
-  height: 100vh;
+  height: var(--app-height);
 }
 
 #scene {
   display: block;
   background: #7aa7bd;
+  touch-action: none;
 }
 
 .panel {
@@ -81,6 +87,194 @@ input:focus {
 
 .panel[hidden] {
   display: none;
+}
+
+.transition-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: #050708;
+  color: #f4fbf8;
+  font-size: clamp(28px, 8vw, 72px);
+  font-weight: 800;
+  letter-spacing: 0;
+  opacity: 0;
+  transition: opacity 360ms ease;
+}
+
+.transition-overlay.active {
+  opacity: 1;
+}
+
+.location-hud {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: 50%;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(760px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(12, 18, 21, 0.72);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+}
+
+.location-meta {
+  display: grid;
+  min-width: 0;
+  margin-right: auto;
+  line-height: 1.1;
+}
+
+.location-meta span {
+  color: #91d9b4;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.location-meta strong {
+  overflow: hidden;
+  color: #f3f7f8;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.location-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.location-actions button {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.feature-panel {
+  top: 82px;
+  left: 50%;
+  z-index: 14;
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(74vh, calc(var(--app-height) - 120px));
+  overflow: auto;
+  padding: 14px;
+  transform: translateX(-50%);
+}
+
+.feature-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.feature-header p {
+  margin: 4px 0 0;
+  color: #a9bac0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.feature-header button {
+  min-width: 38px;
+  padding: 0;
+}
+
+.dorfbuch-content {
+  display: grid;
+  gap: 10px;
+}
+
+.dorfbuch-card {
+  border: 1px solid rgba(142, 227, 177, 0.2);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(7, 22, 24, 0.62);
+}
+
+.dorfbuch-card h3 {
+  margin: 0 0 8px;
+  color: #f3f7f8;
+  font-size: 15px;
+}
+
+.dorfbuch-card dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 0;
+  color: #dce8e8;
+  font-size: 13px;
+}
+
+.dorfbuch-card dt {
+  color: #91d9b4;
+  font-weight: 700;
+}
+
+.dorfbuch-card dd {
+  margin: 0;
+}
+
+.wallet-panel {
+  width: min(700px, calc(100vw - 28px));
+}
+
+.wallet-summary,
+.wallet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.wallet-summary {
+  margin-bottom: 12px;
+  color: #dce8e8;
+  font-size: 14px;
+}
+
+.wallet-summary span {
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.coin-game {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(46px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.coin-button {
+  min-width: 0;
+  min-height: 46px;
+  border-color: rgba(255, 214, 102, 0.55);
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 30%, #fff0a6, #d49c2f 58%, #875b13);
+  color: #1a1304;
+  font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.coin-button.spent {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #819094;
 }
 
 .command-panel {
@@ -102,10 +296,13 @@ input:focus {
 
 .dialogue-panel {
   left: 50%;
-  bottom: 18px;
+  bottom: max(18px, var(--safe-bottom));
   width: min(720px, calc(100vw - 36px));
+  max-height: min(56vh, calc(var(--app-height) - 36px));
+  overflow: auto;
   padding: 10px;
   transform: translateX(-50%);
+  overscroll-behavior: contain;
 }
 
 .panel-title {
@@ -209,7 +406,7 @@ input:focus {
 
 .dialogue-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(132px, auto) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -219,10 +416,44 @@ input:focus {
 }
 
 .mic-button {
-  min-width: 46px;
+  min-width: 48px;
+  min-height: 44px;
   padding: 0 12px;
   font-size: 18px;
   line-height: 1;
+}
+
+.mic-device {
+  width: min(190px, 32vw);
+  min-height: 42px;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.mic-device[hidden] {
+  display: none;
+}
+
+.mic-meter {
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mic-meter[hidden] {
+  display: none;
+}
+
+.mic-meter span {
+  display: block;
+  width: var(--mic-level, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7ddfac, #f6d66b, #ff7777);
+  transition: width 90ms linear;
 }
 
 .mic-button.listening {
@@ -487,6 +718,34 @@ button.active {
 }
 
 @media (max-width: 820px) {
+  .location-hud {
+    top: max(8px, env(safe-area-inset-top, 0px));
+    align-items: stretch;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px;
+  }
+
+  .location-actions {
+    justify-content: stretch;
+  }
+
+  .location-actions button {
+    flex: 1 1 auto;
+    min-height: 42px;
+  }
+
+  .feature-panel {
+    top: max(106px, calc(env(safe-area-inset-top, 0px) + 104px));
+    width: calc(100vw - 20px);
+    max-height: min(72vh, calc(var(--app-height) - 130px - var(--safe-bottom)));
+    padding: 12px;
+  }
+
+  .coin-game {
+    grid-template-columns: repeat(auto-fit, minmax(42px, 1fr));
+  }
+
   .mesh-panel {
     top: 12px;
     right: 12px;
@@ -505,9 +764,28 @@ button.active {
   .dialogue-panel {
     left: 12px;
     right: 12px;
-    bottom: 12px;
+    bottom: max(10px, var(--safe-bottom));
     width: auto;
+    max-height: min(62vh, calc(var(--app-height) - 20px - var(--safe-bottom)));
+    padding: 10px;
     transform: none;
+  }
+
+  .npc-speech-line {
+    font-size: 14px;
+  }
+
+  .quest-line-de {
+    font-size: 15px;
+  }
+
+  .quest-chip,
+  button {
+    min-height: 44px;
+  }
+
+  .quest-chip {
+    padding: 8px 10px;
   }
 
   .command-form {
@@ -515,6 +793,29 @@ button.active {
   }
 
   .dialogue-form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 52px;
+  }
+
+  .dialogue-form input,
+  .dialogue-form .mic-device,
+  .dialogue-form .mic-meter {
+    grid-column: 1 / -1;
+  }
+
+  .mic-device {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .mic-button {
+    justify-self: end;
+    min-width: 52px;
+  }
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-height: 100dvh;
   }
 }

@@ -2,7 +2,7 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Der Wachmann</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/styles.css" />
@@ -20,6 +20,22 @@
   <body>
     <main id="app">
       <canvas id="scene"></canvas>
+
+      <div id="transition-overlay" class="transition-overlay" aria-live="polite">
+        <div id="transition-title">Tag 1</div>
+      </div>
+
+      <section class="location-hud" aria-label="Location controls">
+        <div class="location-meta">
+          <span id="day-label">Tag 1</span>
+          <strong id="location-label">Dorf Grünbach</strong>
+        </div>
+        <div class="location-actions">
+          <button id="dorfbuch-open" type="button">Dorfbuch</button>
+          <button id="wallet-open" type="button">Münzen</button>
+          <button id="exit-location" type="button" hidden>Выйти в деревню</button>
+        </div>
+      </section>
 
       <section class="panel command-panel" aria-label="Command panel" hidden>
         <div class="status-line">
@@ -95,6 +111,7 @@
             spellcheck="false"
             placeholder="Напишите или скажите 🎤 немецкую фразу"
           />
+          <select id="mic-device" class="mic-device" title="Выбор микрофона" aria-label="Выбор микрофона" hidden></select>
           <button
             id="mic-button"
             class="mic-button"
@@ -103,7 +120,38 @@
             aria-label="Ответить голосом"
           >🎤</button>
           <button id="dialogue-submit" type="submit" title="Send line to selected character" hidden>Talk</button>
+          <div id="mic-meter" class="mic-meter" aria-hidden="true" hidden><span></span></div>
         </form>
+      </section>
+
+      <section id="dorfbuch-panel" class="panel feature-panel" aria-label="Dorfbuch" hidden>
+        <div class="feature-header">
+          <div>
+            <div class="panel-title inline-title">Dorfbuch</div>
+            <p>Жители и полезные слова появляются здесь по мере квестов.</p>
+          </div>
+          <button id="dorfbuch-close" type="button" title="Закрыть">x</button>
+        </div>
+        <div id="dorfbuch-content" class="dorfbuch-content"></div>
+      </section>
+
+      <section id="wallet-panel" class="panel feature-panel wallet-panel" aria-label="Coin wallet" hidden>
+        <div class="feature-header">
+          <div>
+            <div class="panel-title inline-title">Geldbeutel</div>
+            <p id="wallet-status">20 Münzen. Zimmer: zwölf Münzen.</p>
+          </div>
+          <button id="wallet-close" type="button" title="Закрыть">x</button>
+        </div>
+        <div class="wallet-summary">
+          <span>В кошельке: <strong id="wallet-count">20</strong></span>
+          <span>На стойке: <strong id="counter-count">0</strong>/12</span>
+        </div>
+        <div id="coin-game" class="coin-game" aria-label="Монетки"></div>
+        <div class="wallet-actions">
+          <button id="coin-reset" type="button">Сбросить</button>
+          <button id="coin-pay" type="button">Bitte</button>
+        </div>
       </section>
 
       <section class="panel mesh-panel" aria-label="Mesh navigation classes" hidden>
