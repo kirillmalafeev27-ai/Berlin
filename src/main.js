@@ -41,6 +41,7 @@ const dialogueInput = document.querySelector('#dialogue-input');
 const dialogueSubmit = document.querySelector('#dialogue-submit');
 const interactNpcButton = document.querySelector('#interact-npc');
 const micButton = document.querySelector('#mic-button');
+const micTranscript = document.querySelector('#mic-transcript');
 
 if (dialogueInput) {
   dialogueInput.placeholder = 'Напишите или скажите 🎤 немецкую фразу';
@@ -1601,7 +1602,7 @@ function playNpcPreferredAnimation(npc, keywords, options = {}) {
   // The rigged, lip-synced guard has no gesture clips that retarget onto his
   // skeleton, so any external clip would leave him in a T-pose. Keep him in his
   // bound embedded idle no matter which gesture is requested.
-  if (isQuestGuard(npc)) {
+  if (isQuestGuard(npc) && !options.allowQuestGuardExternal) {
     if (npc.currentAnimationName !== npc.idleAnimationName) {
       playNpcIdle(npc);
     }
@@ -1643,7 +1644,10 @@ function playNpcIdle(npc, options = {}) {
 }
 
 function playNpcWalk(npc) {
-  return playNpcPreferredAnimation(npc, ['walking', 'walk'], { loop: true });
+  return playNpcPreferredAnimation(npc, ['walking', 'walk'], {
+    loop: true,
+    allowQuestGuardExternal: npc?.scriptedMovement === true,
+  });
 }
 
 // Fallback for characters with no bindable idle clip: pose the arms down out of
@@ -1700,17 +1704,31 @@ function angleToAgent(point) {
   return toAgent.lengthSq() > 0.001 ? Math.atan2(toAgent.x, toAgent.z) : 0;
 }
 
-function faceNpcToAgent(npc, amount = 1) {
-  if (!npc?.root) {
-    return;
+function angleBetweenPoints(from, to) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  return dx * dx + dz * dz > 0.0001 ? Math.atan2(dx, dz) : 0;
+}
+
+function turnNpcTowardYaw(npc, desiredYaw, amount = 1) {
+  if (!npc?.root || !Number.isFinite(desiredYaw)) {
+    return 0;
   }
 
-  const desiredYaw = angleToAgent(npc.root.position);
   const yawDelta = Math.atan2(
     Math.sin(desiredYaw - npc.root.rotation.y),
     Math.cos(desiredYaw - npc.root.rotation.y),
   );
   npc.root.rotation.y += yawDelta * THREE.MathUtils.clamp(amount, 0, 1);
+  return Math.abs(yawDelta);
+}
+
+function faceNpcToAgent(npc, amount = 1) {
+  if (!npc?.root) {
+    return;
+  }
+
+  turnNpcTowardYaw(npc, angleToAgent(npc.root.position), amount);
 }
 
 function faceAgentToNpc(npc) {
@@ -1813,11 +1831,15 @@ function createNpcFromGltf(gltf, url, index, total) {
     state: 'idle',
     dialogue: [],
     talkUntil: 0,
+    afterTalk: null,
     marker: null,
     target: null,
     groundBiasY: 0,
     groundBiasDirty: false,
     useProceduralIdle: false,
+    scriptedMovement: false,
+    turnTargetYaw: null,
+    finalYaw: null,
   };
 
   setupProceduralIdle(npc);
@@ -1956,29 +1978,119 @@ function getRandomPatrolCandidate(npc) {
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-function startNpcPath(npc, destination) {
-  const path = navigation?.findPath(npc.root.position, destination) || [];
+function finishNpcPath(npc) {
+  npc.path = [];
+  npc.pathIndex = 0;
 
-  if (path.length < 2) {
-    npc.waitTimer = 1.5;
+  if (Number.isFinite(npc.finalYaw)) {
+    npc.turnTargetYaw = npc.finalYaw;
+    npc.finalYaw = null;
+    npc.state = 'turningFinal';
     playNpcIdle(npc);
-    return false;
+    return;
   }
 
+  npc.scriptedMovement = false;
+  npc.state = 'idle';
+  playNpcIdle(npc);
+}
+
+function startNpcPath(npc, destination, options = {}) {
+  let path = navigation?.findPath(npc.root.position, destination) || [];
+
+  if (path.length < 2) {
+    if (options.allowDirect && npc.root.position.distanceToSquared(destination) > 0.04) {
+      path = [npc.root.position.clone(), destination.clone()];
+    } else {
+      npc.waitTimer = 1.5;
+      playNpcIdle(npc);
+      return false;
+    }
+  }
+
+  npc.scriptedMovement = options.scripted === true;
+  npc.finalYaw = Number.isFinite(options.finalYaw) ? options.finalYaw : null;
   npc.path = path;
   npc.pathIndex = 1;
-  npc.state = 'walking';
-  playNpcWalk(npc);
+
+  if (options.turnFirst) {
+    npc.turnTargetYaw = angleBetweenPoints(npc.root.position, path[npc.pathIndex]);
+    npc.state = 'turningToWalk';
+    playNpcIdle(npc);
+  } else {
+    npc.state = 'walking';
+    playNpcWalk(npc);
+  }
+
   return true;
 }
 
+function startQuestGuardOpenMove(npc) {
+  if (!npc) {
+    return false;
+  }
+
+  const openPoint = snapToNpcGround(QUEST_POINTS.guardOpen);
+  const finalYaw = Math.atan2(
+    QUEST_POINTS.insideVillage.x - openPoint.x,
+    QUEST_POINTS.insideVillage.z - openPoint.z,
+  );
+  const started = startNpcPath(npc, openPoint, {
+    allowDirect: true,
+    finalYaw,
+    scripted: true,
+    turnFirst: true,
+  });
+
+  if (started) {
+    setStatus('Bruno открывает проход...', 'ready');
+    syncNpcTarget(npc);
+  }
+
+  return started;
+}
+
 function updateNpcMovement(npc, deltaTime) {
+  if (npc.state === 'turningToWalk') {
+    const target = npc.path[npc.pathIndex];
+
+    if (!target) {
+      finishNpcPath(npc);
+      return;
+    }
+
+    const desiredYaw = angleBetweenPoints(npc.root.position, target);
+    const remaining = turnNpcTowardYaw(npc, desiredYaw, Math.min(deltaTime * 5, 1));
+    playNpcIdle(npc);
+
+    if (remaining < 0.08) {
+      npc.state = 'walking';
+      playNpcWalk(npc);
+    }
+
+    return;
+  }
+
+  if (npc.state === 'turningFinal') {
+    const remaining = turnNpcTowardYaw(npc, npc.turnTargetYaw, Math.min(deltaTime * 5, 1));
+    playNpcIdle(npc);
+
+    if (remaining < 0.035) {
+      npc.turnTargetYaw = null;
+      npc.scriptedMovement = false;
+      npc.state = 'idle';
+      playNpcIdle(npc);
+    }
+
+    return;
+  }
+
   if (npc.state === 'talking') {
     faceNpcToAgent(npc, Math.min(deltaTime * 8, 1));
     return;
   }
 
-  if (npc.stationary) {
+  if (npc.stationary && !npc.scriptedMovement) {
     npc.path = [];
     npc.pathIndex = 0;
     npc.state = 'idle';
@@ -1993,7 +2105,7 @@ function updateNpcMovement(npc, deltaTime) {
 
   const isCloseToPlayer = npc.root.position.distanceToSquared(agent.position) <= NPC_TALK_STOP_DISTANCE * NPC_TALK_STOP_DISTANCE;
 
-  if (selectedNpc === npc && isCloseToPlayer) {
+  if (selectedNpc === npc && isCloseToPlayer && !npc.scriptedMovement) {
     npc.path = [];
     npc.pathIndex = 0;
     npc.state = 'idle';
@@ -2003,6 +2115,11 @@ function updateNpcMovement(npc, deltaTime) {
   }
 
   if (!npc.path.length || npc.pathIndex >= npc.path.length) {
+    if (npc.scriptedMovement) {
+      finishNpcPath(npc);
+      return;
+    }
+
     npc.waitTimer -= deltaTime;
 
     if (npc.waitTimer <= 0) {
@@ -2044,11 +2161,15 @@ function updateNpcMovement(npc, deltaTime) {
     npc.pathIndex += 1;
 
     if (npc.pathIndex >= npc.path.length) {
-      npc.path = [];
-      npc.pathIndex = 0;
-      npc.waitTimer = NPC_PATROL_WAIT_MIN + Math.random() * NPC_PATROL_WAIT_MAX;
-      npc.state = 'idle';
-      playNpcIdle(npc);
+      if (npc.scriptedMovement) {
+        finishNpcPath(npc);
+      } else {
+        npc.path = [];
+        npc.pathIndex = 0;
+        npc.waitTimer = NPC_PATROL_WAIT_MIN + Math.random() * NPC_PATROL_WAIT_MAX;
+        npc.state = 'idle';
+        playNpcIdle(npc);
+      }
     }
 
     return;
@@ -2078,8 +2199,15 @@ function updateNpcs(deltaTime) {
     npc.mouth?.update(deltaTime);
 
     if (npc.state === 'talking' && now > npc.talkUntil && !npc.mouth?.active) {
-      npc.state = 'idle';
-      playNpcIdle(npc);
+      const afterTalk = npc.afterTalk;
+      npc.afterTalk = null;
+
+      if (afterTalk) {
+        afterTalk();
+      } else {
+        npc.state = 'idle';
+        playNpcIdle(npc);
+      }
     }
 
     updateNpcMovement(npc, deltaTime);
@@ -2382,12 +2510,10 @@ function finishQuestSuccess(npc) {
   questState.stage = 'success';
   renderQuestChips([]);
   setQuestStatus('Квест выполнен: Der Wachmann');
+  npc.afterTalk = () => {
+    startQuestGuardOpenMove(npc);
+  };
   speakQuestLine(npc, 'Komm rein!', 'Заходи!', { intent: 'happy' });
-
-  const openPoint = snapToNpcGround(QUEST_POINTS.guardOpen);
-  npc.root.position.copy(openPoint);
-  npc.root.rotation.y = Math.atan2(QUEST_POINTS.insideVillage.x - openPoint.x, QUEST_POINTS.insideVillage.z - openPoint.z);
-  syncNpcTarget(npc);
 }
 
 function handleQuestClarify(npc, helpStage) {
@@ -2937,6 +3063,17 @@ function updateMicButton() {
         : 'Ответить голосом';
 }
 
+function setMicTranscript(message, state = 'ready') {
+  if (!micTranscript) {
+    return;
+  }
+
+  const text = String(message || '').trim();
+  micTranscript.hidden = !text;
+  micTranscript.textContent = text;
+  micTranscript.classList.toggle('error', state === 'error');
+}
+
 function stopMicStream() {
   if (dictation.stream) {
     for (const track of dictation.stream.getTracks()) {
@@ -2951,6 +3088,7 @@ async function transcribeRecording(blob, mimeType) {
   dictation.state = 'transcribing';
   updateMicButton();
   setStatus('Распознаю…', 'ready');
+  setMicTranscript('Распознаю запись с микрофона…');
 
   try {
     const response = await fetch('/api/stt?lang=de', {
@@ -2964,9 +3102,17 @@ async function transcribeRecording(blob, mimeType) {
       throw new Error(payload.error || `STT ${response.status}`);
     }
 
+    if (payload.ok === false) {
+      const message = payload.error || 'Не распознано: повторите фразу ближе к микрофону.';
+      setMicTranscript(message, 'error');
+      setStatus(message, 'error');
+      return;
+    }
+
     const text = String(payload.text || '').trim();
 
     if (!text) {
+      setMicTranscript('Не распознано: микрофон не вернул текст.', 'error');
       setStatus('Не расслышал. Нажмите 🎤 и повторите.', 'error');
       return;
     }
@@ -2974,10 +3120,12 @@ async function transcribeRecording(blob, mimeType) {
     if (dialogueInput) {
       // Show the player what was recognised, then run it through evaluation.
       dialogueInput.value = text;
+      setMicTranscript(`Вы сказали / распознано: «${text}»`);
       setStatus(`Вы сказали: «${text}»`, 'ready');
       submitDialogueLine();
     }
   } catch (error) {
+    setMicTranscript(`Не распознано: ${error.message || 'ошибка распознавания речи'}`, 'error');
     setStatus(error.message || 'Не удалось распознать речь', 'error');
   } finally {
     dictation.state = 'idle';
@@ -2987,6 +3135,7 @@ async function transcribeRecording(blob, mimeType) {
 
 async function startDictation() {
   if (!dictation.supported) {
+    setMicTranscript('Голосовой ввод недоступен в этом браузере.', 'error');
     setStatus('Голосовой ввод недоступен в этом браузере', 'error');
     return;
   }
@@ -3007,6 +3156,7 @@ async function startDictation() {
   try {
     dictation.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (error) {
+    setMicTranscript('Доступ к микрофону запрещен. Разрешите его в браузере.', 'error');
     setStatus('Доступ к микрофону запрещён. Разрешите его в браузере.', 'error');
     return;
   }
@@ -3034,6 +3184,7 @@ async function startDictation() {
     if (blob.size < 1200) {
       dictation.state = 'idle';
       updateMicButton();
+      setMicTranscript('Слишком коротко: нажмите 🎤 и скажите фразу целиком.', 'error');
       setStatus('Слишком коротко. Нажмите 🎤 и говорите.', 'error');
       return;
     }
@@ -3046,12 +3197,14 @@ async function startDictation() {
     dictation.state = 'idle';
     dictation.recorder = null;
     updateMicButton();
+    setMicTranscript('Ошибка записи микрофона.', 'error');
     setStatus('Ошибка записи микрофона', 'error');
   };
 
   recorder.start();
   dictation.state = 'recording';
   updateMicButton();
+  setMicTranscript('Слушаю микрофон… нажмите 🎤 еще раз, когда закончите фразу.');
   setStatus('🎤 Запись… нажмите 🎤 ещё раз, когда закончите', 'ready');
 }
 

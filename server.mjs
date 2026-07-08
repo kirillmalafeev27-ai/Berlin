@@ -810,7 +810,8 @@ async function handleStt(request, response) {
 
     if (text === null) {
       if (hadProvider) {
-        sendJson(response, 422, {
+        sendJson(response, 200, {
+          ok: false,
           error: 'Не расслышал речь. Проверьте выбранный микрофон и повторите фразу ближе к микрофону.',
           detail: errors.join(' | ') || undefined,
         });
@@ -826,7 +827,7 @@ async function handleStt(request, response) {
     }
 
     console.log(`STT(${provider}) "${text}"`);
-    sendJson(response, 200, { text, provider });
+    sendJson(response, 200, { ok: true, text, provider });
   } catch (error) {
     sendJson(response, 400, { error: error.message || 'STT failed' });
   }
@@ -852,6 +853,12 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === '/api/stt' && request.method === 'POST') {
     await handleStt(request, response);
+    return;
+  }
+
+  if (url.pathname === '/favicon.ico') {
+    response.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
+    response.end();
     return;
   }
 
