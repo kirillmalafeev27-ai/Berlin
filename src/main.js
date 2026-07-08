@@ -91,6 +91,9 @@ const ELEVENLABS_VOICES = {
   arnold: 'VR6AewLTigWG4xSOukaG',
   adam: 'pNInz6obpgDQGcFmaJgB',
   sam: 'yoZ06aMxZJJ28mfd3POQ',
+  // Warm European female, reads German cleanly with eleven_multilingual_v2 -
+  // used for the innkeeper at the bar.
+  charlotte: 'XB0fDUnXU5powFXDhCwa',
 };
 // Rigged, lip-synced characters used inside the Gasthaus (from the "characters"
 // collection). Falling back to a simple placeholder if a GLB fails to load.
@@ -145,7 +148,7 @@ const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
 // origin (X in [-5.4, 5.4], Z in [-4.3, 4.3]) with its surface at y = 0. The
 // entrance is on the +Z (front) side; the bar sits front-left, the fireplace
 // back-right.
-const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(2.4, 0.03, 3.3);
+const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(2.2, 0.03, 3.4);
 const GASTHAUS_BOUNDS = { minX: -4.9, maxX: 4.9, minZ: -3.9, maxZ: 3.9, y: 0.03 };
 const GASTHAUS_ENTRY_TARGET = {
   id: GASTHAUS_ENTRY_TARGET_ID,
@@ -162,11 +165,11 @@ const GASTHAUS_NPCS = [
     label: 'Frau Berta',
     role: 'Frau Berta, the loud, warm, businesslike innkeeper of Gasthaus Grünbach',
     aliases: ['berta', 'frau berta', 'wirtin', 'innkeeper', 'хозяйка'],
-    // Behind the bar (front-left of the room), facing the entrance.
+    // Behind the bar counter (front-left of the room), facing the entrance.
     modelUrl: GASTHAUS_CHARACTER_URLS.grandmother,
-    position: new THREE.Vector3(-2.9, 0, 1.4),
+    position: new THREE.Vector3(-3.0, 0, 2.0),
     yaw: 0,
-    voiceId: ELEVENLABS_VOICES.bella,
+    voiceId: ELEVENLABS_VOICES.charlotte,
     color: 0x7d3f98,
   },
   {
@@ -174,9 +177,9 @@ const GASTHAUS_NPCS = [
     label: 'Gast Jörg',
     role: 'Jörg, a relaxed guest at the tavern table',
     aliases: ['jörg', 'joerg', 'gast', 'guest', 'постоялец'],
-    // Seated at the right-hand table, facing across the room.
+    // Seated on the bench at the front-right table, facing into the room.
     modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
-    position: new THREE.Vector3(3.3, 0, 2.3),
+    position: new THREE.Vector3(3.44, 0, 2.92),
     yaw: Math.PI,
     seated: true,
     voiceId: ELEVENLABS_VOICES.josh,
@@ -189,7 +192,8 @@ const GASTHAUS_NPCS = [
     role: 'Hans, a friendly village baker relaxing at the tavern with a mug',
     aliases: ['hans', 'baecker', 'bäcker', 'baker', 'пекарь'],
     modelUrl: GASTHAUS_CHARACTER_URLS.chef,
-    position: new THREE.Vector3(3.4, 0, -2.2),
+    // Seated on the single chair by the stairs, facing back into the room.
+    position: new THREE.Vector3(3.44, 0, -2.5),
     yaw: 0,
     seated: true,
     voiceId: ELEVENLABS_VOICES.antoni,
@@ -1878,6 +1882,23 @@ function configureStaticModel(root) {
   });
 }
 
+// The tavern GLB ships with a batch of "bar_enrich_*" props that float in the
+// air around the counter. Hide them so the bar reads cleanly.
+function hideGasthausClutter(model) {
+  let hidden = 0;
+
+  model.traverse((object) => {
+    if (object.isMesh && /bar_enrich/i.test(object.name)) {
+      object.visible = false;
+      hidden += 1;
+    }
+  });
+
+  if (hidden) {
+    console.info(`Gasthaus: hid ${hidden} floating bar props`);
+  }
+}
+
 function measureGasthausFloor(model) {
   // The ground-floor tiles define the playable footprint. Excluding "upper"
   // (the balcony) keeps roof overhangs and the upper storey from skewing the
@@ -2012,22 +2033,8 @@ function buildGasthausOverlay(root) {
   menuLabel.userData.gasthausAction = 'menu';
   root.add(menuLabel);
 
-  // Room doors for the "which Zimmer?" step, along the back wall.
-  for (const item of GASTHAUS_DOOR_TARGETS) {
-    const door = makeGasthausBox(
-      `Gasthaus_${item.id}`,
-      item.position.clone().add(new THREE.Vector3(0, 0.85, 0)),
-      new THREE.Vector3(1.1, 1.7, 0.16),
-      item.word === 'drei' ? 0x3f6e55 : 0x4a3525,
-      `room:${item.word}`,
-    );
-    root.add(door);
-
-    const label = createGasthausTextLabel(item.word, { width: 0.8, height: 0.3, size: 34 });
-    label.position.copy(item.position).add(new THREE.Vector3(0, 1.75, 0.12));
-    label.userData.gasthausAction = `room:${item.word}`;
-    root.add(label);
-  }
+  // No more primitive "Tür eins/zwei/..." boxes: the room is chosen from the
+  // chip buttons / by typing during the get_key step, so they are not needed.
 }
 
 function createGasthausNpcVisual(color) {
@@ -2161,13 +2168,11 @@ function buildGasthausNpc(definition, rigged) {
   if (rigged) {
     if (npc.seated) {
       applyGasthausSeatedIdle(npc);
+      npc.mixer.update(0);
+      groundSeatedNpc(npc);
     } else {
       playNpcIdle(npc, { fade: 0 });
-    }
-
-    npc.mixer.update(0);
-
-    if (!npc.seated) {
+      npc.mixer.update(0);
       calibrateNpcGroundBias(npc);
       npc.groundBiasDirty = false;
       refitNpcToGround(npc);
@@ -2175,6 +2180,25 @@ function buildGasthausNpc(definition, rigged) {
   }
 
   return npc;
+}
+
+// Drop a seated character so the lowest point of its sitting pose rests on the
+// floor. Runs once, after the sitting clip is applied (seated NPCs skip the
+// per-frame re-ground, which is why they previously floated at standing height
+// and appeared to slide across the scene as the camera moved).
+function groundSeatedNpc(npc) {
+  if (!npc?.visual) {
+    return;
+  }
+
+  npc.visual.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(npc.visual);
+
+  if (box.isEmpty() || !Number.isFinite(box.min.y)) {
+    return;
+  }
+
+  npc.visual.position.y -= box.min.y - npc.root.position.y;
 }
 
 function applyGasthausSeatedIdle(npc) {
@@ -2342,6 +2366,7 @@ async function ensureGasthausLoaded() {
       const gltf = await loadGltf(loader, GASTHAUS_INTERIOR_URL);
       gasthausModel = gltf.scene;
       gasthausModel.name = 'Gasthaus_Interior_Model';
+      hideGasthausClutter(gasthausModel);
       configureStaticModel(gasthausModel);
       normalizeGasthausModel(gasthausModel);
       gasthausRoot.add(gasthausModel);
@@ -2573,7 +2598,8 @@ function updateLocationTriggers() {
     return;
   }
 
-  if (agent.position.distanceToSquared(GASTHAUS_DOOR_POINT) <= 2.3 * 2.3) {
+  // Require the player to be right at the door before entering (was 2.3).
+  if (agent.position.distanceToSquared(GASTHAUS_DOOR_POINT) <= 1.4 * 1.4) {
     enterGasthaus();
   }
 }
@@ -2944,7 +2970,7 @@ function normalizeCharacterModel(model) {
   const height = box.max.y - box.min.y;
 
   if (Number.isFinite(height) && height > 0.001) {
-    model.scale.multiplyScalar(1.72 / height);
+    model.scale.multiplyScalar(1.85 / height);
   }
 
   model.updateMatrixWorld(true);
@@ -3484,7 +3510,9 @@ function fitNpcVisualToGround(npc) {
   const height = box.max.y - box.min.y;
 
   if (Number.isFinite(height) && height > 0.001) {
-    const targetHeight = 1.72;
+    // Slightly larger than life so characters read well next to the furniture
+    // (applies to the village guard and the Gasthaus characters alike).
+    const targetHeight = 1.85;
     const scale = targetHeight / height;
     npc.visual.scale.multiplyScalar(scale);
     npc.visual.updateMatrixWorld(true);
@@ -4076,7 +4104,12 @@ function updateNpcMovement(npc, deltaTime) {
   }
 
   if (npc.state === 'talking') {
-    faceNpcToAgent(npc, Math.min(deltaTime * 8, 1));
+    // Seated guests keep their fixed orientation; turning a sitting body to
+    // track the player looks like sliding.
+    if (!npc.seated) {
+      faceNpcToAgent(npc, Math.min(deltaTime * 8, 1));
+    }
+
     return;
   }
 
@@ -4085,7 +4118,10 @@ function updateNpcMovement(npc, deltaTime) {
     npc.pathIndex = 0;
     npc.state = 'idle';
 
-    if (npc.root.position.distanceToSquared(agent.position) <= QUEST_TRIGGER_ALERT * QUEST_TRIGGER_ALERT) {
+    if (
+      !npc.seated &&
+      npc.root.position.distanceToSquared(agent.position) <= QUEST_TRIGGER_ALERT * QUEST_TRIGGER_ALERT
+    ) {
       faceNpcToAgent(npc, Math.min(deltaTime * 4, 1));
     }
 
