@@ -47,6 +47,7 @@ const micMeterBar = micMeter?.querySelector('span') || null;
 const micTranscript = document.querySelector('#mic-transcript');
 const transitionOverlay = document.querySelector('#transition-overlay');
 const transitionTitle = document.querySelector('#transition-title');
+const sceneHint = document.querySelector('#scene-hint');
 const locationLabel = document.querySelector('#location-label');
 const dayLabel = document.querySelector('#day-label');
 const exitLocationButton = document.querySelector('#exit-location');
@@ -73,8 +74,24 @@ const CUSTOM_TARGET_STORAGE_KEY = 'berlin-game.custom-targets.v1';
 const DELETED_TARGET_STORAGE_KEY = 'berlin-game.deleted-targets.v1';
 const NAV_AREA_BLOCK_STORAGE_KEY = 'berlin-game.nav-area-blocks.v1';
 const MAP_URL = '/fantasy-town.glb';
-const GASTHAUS_INTERIOR_URL = '/low_poly_tavern_interior.glb';
+const GASTHAUS_INTERIOR_URL = '/Tavern%20noch%20eine.glb';
+// The interior is fitted + centred on its ground-floor tiles so roof overhangs
+// never shrink or offset the playable area (see normalizeGasthausModel).
+const GASTHAUS_FLOOR_SPAN = 10.8;
 const CHARACTER_MODEL_URL = '/Meshy_AI_Character_output.fbx';
+// Rigged, lip-synced characters used inside the Gasthaus (from the "characters"
+// collection). Falling back to a simple placeholder if a GLB fails to load.
+const GASTHAUS_CHARACTER_URLS = {
+  grandmother: '/Mixamo/characters/Idle_Grandmother_Y_UP_baked.rigged%20(2).glb',
+  berliner: '/Mixamo/characters/Idle%20berliner%20man_YUP_baked.rigged.glb',
+  chef: '/Mixamo/characters/Idle%20Meshy_AI_The_Welcoming_Chef_0705154142_texture_YUP_baked.rigged.glb',
+};
+// Seated NPCs loop this Mixamo body clip; it retargets onto the shared
+// mixamorig skeleton the characters use.
+const GASTHAUS_SITTING_CLIP_URLS = [
+  '/Mixamo/glb/Sitting%20Laughing.glb',
+  '/Mixamo/glb/Sitting%20Idle.glb',
+];
 const EMPTY_TEXTURE_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lb9ZfwAAAABJRU5ErkJggg==';
 const NPC_ID = 'npc_character';
@@ -111,8 +128,12 @@ const GASTHAUS_ENTRY_TARGET_ID = 'gasthaus_gruenbach';
 const GASTHAUS_DOOR_POINT = new THREE.Vector3(72.0, 4.82, 57.0);
 const GASTHAUS_APPROACH_POINT = new THREE.Vector3(70.2, 4.82, 59.2);
 const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
-const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(0, 0.08, 5.8);
-const GASTHAUS_BOUNDS = { minX: -5.8, maxX: 5.8, minZ: -6.2, maxZ: 6.4, y: 0.08 };
+// Interior coordinates for "Tavern noch eine": the floor is centred on the
+// origin (X in [-5.4, 5.4], Z in [-4.3, 4.3]) with its surface at y = 0. The
+// entrance is on the +Z (front) side; the bar sits front-left, the fireplace
+// back-right.
+const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(2.4, 0.03, 3.3);
+const GASTHAUS_BOUNDS = { minX: -4.9, maxX: 4.9, minZ: -3.9, maxZ: 3.9, y: 0.03 };
 const GASTHAUS_ENTRY_TARGET = {
   id: GASTHAUS_ENTRY_TARGET_ID,
   label: 'Gasthaus Grünbach',
@@ -128,8 +149,11 @@ const GASTHAUS_NPCS = [
     label: 'Frau Berta',
     role: 'Frau Berta, the loud, warm, businesslike innkeeper of Gasthaus Grünbach',
     aliases: ['berta', 'frau berta', 'wirtin', 'innkeeper', 'хозяйка'],
-    position: new THREE.Vector3(-1.8, 0.08, -2.55),
-    yaw: Math.PI,
+    // Behind the bar (front-left of the room), facing the entrance.
+    modelUrl: GASTHAUS_CHARACTER_URLS.grandmother,
+    position: new THREE.Vector3(-2.9, 0, 1.4),
+    yaw: 0,
+    voiceId: ELEVENLABS_VOICES.bella,
     color: 0x7d3f98,
   },
   {
@@ -137,16 +161,33 @@ const GASTHAUS_NPCS = [
     label: 'Gast Jörg',
     role: 'Jörg, a relaxed guest at the tavern table',
     aliases: ['jörg', 'joerg', 'gast', 'guest', 'постоялец'],
-    position: new THREE.Vector3(2.35, 0.08, -0.6),
-    yaw: -Math.PI / 2,
+    // Seated at the right-hand table, facing across the room.
+    modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
+    position: new THREE.Vector3(3.3, 0, 2.3),
+    yaw: Math.PI,
+    seated: true,
+    voiceId: ELEVENLABS_VOICES.josh,
     color: 0x426aa4,
+  },
+  {
+    // Cameo of a quest 3 neighbour (Bäcker Hans) resting in the tavern.
+    id: 'gast_hans',
+    label: 'Bäcker Hans',
+    role: 'Hans, a friendly village baker relaxing at the tavern with a mug',
+    aliases: ['hans', 'baecker', 'bäcker', 'baker', 'пекарь'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.chef,
+    position: new THREE.Vector3(3.4, 0, -2.2),
+    yaw: 0,
+    seated: true,
+    voiceId: ELEVENLABS_VOICES.antoni,
+    color: 0xc57b2d,
   },
 ];
 const GASTHAUS_DOOR_TARGETS = [
-  { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.6, 0.08, -5.4) },
-  { id: 'room_zwei', label: 'Tür zwei', word: 'zwei', position: new THREE.Vector3(-1.2, 0.08, -5.4) },
-  { id: 'room_drei', label: 'Tür drei', word: 'drei', position: new THREE.Vector3(1.2, 0.08, -5.4) },
-  { id: 'room_vier', label: 'Tür vier', word: 'vier', position: new THREE.Vector3(3.6, 0.08, -5.4) },
+  { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.2, 0, -3.6) },
+  { id: 'room_zwei', label: 'Tür zwei', word: 'zwei', position: new THREE.Vector3(-1.8, 0, -3.6) },
+  { id: 'room_drei', label: 'Tür drei', word: 'drei', position: new THREE.Vector3(-0.4, 0, -3.6) },
+  { id: 'room_vier', label: 'Tür vier', word: 'vier', position: new THREE.Vector3(1.0, 0, -3.6) },
 ];
 const QUEST_THREE_ID = 'drei_nachbarn';
 const QUEST_THREE_NPCS = [
@@ -640,6 +681,39 @@ function setStatus(message, state = 'loading') {
   statusDot.classList.toggle('ready', state === 'ready');
   statusDot.classList.toggle('error', state === 'error');
   publishDebugState();
+}
+
+let sceneHintTimer = null;
+
+// Big centred on-screen prompt (e.g. after finishing the guard quest). Pass
+// durationMs = 0 to keep it up until the next call.
+function showSceneHint(message, durationMs = 7000) {
+  if (!sceneHint) {
+    return;
+  }
+
+  window.clearTimeout(sceneHintTimer);
+  sceneHint.textContent = message;
+  sceneHint.hidden = false;
+  // Force a reflow so the fade-in transition runs even on rapid re-shows.
+  void sceneHint.offsetWidth;
+  sceneHint.classList.add('visible');
+
+  if (durationMs > 0) {
+    sceneHintTimer = window.setTimeout(hideSceneHint, durationMs);
+  }
+}
+
+function hideSceneHint() {
+  if (!sceneHint) {
+    return;
+  }
+
+  window.clearTimeout(sceneHintTimer);
+  sceneHint.classList.remove('visible');
+  sceneHintTimer = window.setTimeout(() => {
+    sceneHint.hidden = true;
+  }, 340);
 }
 
 function isGameAudioUnlocked() {
@@ -1415,12 +1489,26 @@ async function sendGasthausDialogueToNpc(npc, message) {
   faceNpcToAgent(npc, 1);
   faceAgentToNpc(npc);
 
-  if (npc.id === 'gast_joerg') {
-    gasthausQuest.joergAnswered = true;
-    renderDorfbuch();
-    await gasthausSpeak(npc, /^ja\b/i.test(line) ? 'Ja! Schönes Dorf. Prost!' : 'Nein? Trotzdem: Prost!', '', {
-      intent: 'happy',
-    });
+  // Any tavern guest other than the innkeeper just makes small talk; only Berta
+  // drives the room-booking quest below.
+  if (npc.id !== 'frau_berta') {
+    const happy = /^ja\b/i.test(line);
+
+    if (npc.id === 'gast_joerg') {
+      gasthausQuest.joergAnswered = true;
+      renderDorfbuch();
+    }
+
+    const de =
+      npc.id === 'gast_hans'
+        ? happy
+          ? 'Ja! Gutes Brot, gutes Bier. Prost!'
+          : 'Kein Problem. Setz dich, trink was! Prost!'
+        : happy
+        ? 'Ja! Schönes Dorf. Prost!'
+        : 'Nein? Trotzdem: Prost!';
+
+    await gasthausSpeak(npc, de, '', { intent: 'happy' });
     return;
   }
 
@@ -1788,24 +1876,48 @@ function configureStaticModel(root) {
   });
 }
 
+function measureGasthausFloor(model) {
+  // The ground-floor tiles define the playable footprint. Excluding "upper"
+  // (the balcony) keeps roof overhangs and the upper storey from skewing the
+  // fit. Falls back to the whole model when no floor meshes are named.
+  const floorBox = new THREE.Box3();
+  let hasFloor = false;
+
+  model.traverse((object) => {
+    if (object.isMesh && /floor/i.test(object.name) && !/upper/i.test(object.name)) {
+      floorBox.expandByObject(object);
+      hasFloor = true;
+    }
+  });
+
+  if (hasFloor && !floorBox.isEmpty()) {
+    return floorBox;
+  }
+
+  return new THREE.Box3().setFromObject(model);
+}
+
 function normalizeGasthausModel(model) {
   model.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(model);
 
-  if (box.isEmpty()) {
+  const fitBox = measureGasthausFloor(model);
+
+  if (fitBox.isEmpty()) {
     return;
   }
 
-  const size = box.getSize(new THREE.Vector3());
+  const size = fitBox.getSize(new THREE.Vector3());
   const maxSize = Math.max(size.x, size.z, 0.001);
-  model.scale.multiplyScalar(10.8 / maxSize);
+  model.scale.multiplyScalar(GASTHAUS_FLOOR_SPAN / maxSize);
   model.updateMatrixWorld(true);
 
-  const fitted = new THREE.Box3().setFromObject(model);
-  const center = fitted.getCenter(new THREE.Vector3());
+  // Re-measure after scaling, centre the floor on the origin in X/Z and drop the
+  // floor surface to y = 0 so the player and NPCs stand directly on it.
+  const floor = measureGasthausFloor(model);
+  const center = floor.getCenter(new THREE.Vector3());
   model.position.x -= center.x;
   model.position.z -= center.z;
-  model.position.y -= fitted.min.y;
+  model.position.y -= floor.max.y;
 }
 
 function createGasthausTextLabel(text, options = {}) {
@@ -1857,7 +1969,7 @@ function makeGasthausBox(name, position, size, color, action = '') {
 
 function createGasthausFloor() {
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(13, 14),
+    new THREE.PlaneGeometry(11, 9),
     new THREE.MeshBasicMaterial({
       color: 0x6d4a2e,
       opacity: 0.02,
@@ -1872,78 +1984,48 @@ function createGasthausFloor() {
   return floor;
 }
 
+// "Tavern noch eine" already models the bar, tables, staircase and wall sign,
+// so the overlay only adds invisible/interaction helpers on top of it.
 function buildGasthausOverlay(root) {
   root.add(createGasthausFloor());
 
-  const counter = makeGasthausBox(
-    'Gasthaus_Counter',
-    new THREE.Vector3(-1.8, 0.55, -3.45),
-    new THREE.Vector3(3.8, 1.1, 0.65),
+  // Invisible click target over the real bar counter (front-left) so tapping
+  // the bar opens the coin wallet.
+  const barHotspot = makeGasthausBox(
+    'Gasthaus_Bar_Hotspot',
+    new THREE.Vector3(-2.9, 0.9, 3.3),
+    new THREE.Vector3(2.8, 1.7, 1.6),
     0x6d3f21,
     'wallet',
   );
-  root.add(counter);
+  barHotspot.material.transparent = true;
+  barHotspot.material.opacity = 0;
+  barHotspot.material.depthWrite = false;
+  root.add(barHotspot);
 
-  const menu = makeGasthausBox(
-    'Gasthaus_Menu',
-    new THREE.Vector3(-3.85, 1.25, -2.95),
-    new THREE.Vector3(0.08, 1.2, 1.0),
-    0x26332d,
-    'menu',
-  );
-  root.add(menu);
-
-  const menuLabel = createGasthausTextLabel('Brot 2 | Suppe 3 | Bier 4', { width: 2.5, height: 0.45, size: 30 });
-  menuLabel.position.set(-3.9, 1.55, -2.95);
+  // Price board (game element) near the bar.
+  const menuLabel = createGasthausTextLabel('Brot 2 | Suppe 3 | Bier 4', { width: 2.2, height: 0.42, size: 30 });
+  menuLabel.position.set(-4.9, 1.7, 2.4);
   menuLabel.rotation.y = Math.PI / 2;
   menuLabel.userData.gasthausAction = 'menu';
   root.add(menuLabel);
 
-  const sign = createGasthausTextLabel('Gasthaus Grünbach', { width: 3.0, height: 0.55, size: 40 });
-  sign.position.set(0, 2.5, 5.95);
-  sign.rotation.y = Math.PI;
-  root.add(sign);
-
+  // Room doors for the "which Zimmer?" step, along the back wall.
   for (const item of GASTHAUS_DOOR_TARGETS) {
     const door = makeGasthausBox(
       `Gasthaus_${item.id}`,
       item.position.clone().add(new THREE.Vector3(0, 0.85, 0)),
-      new THREE.Vector3(1.2, 1.7, 0.16),
+      new THREE.Vector3(1.1, 1.7, 0.16),
       item.word === 'drei' ? 0x3f6e55 : 0x4a3525,
       `room:${item.word}`,
     );
     root.add(door);
 
-    const label = createGasthausTextLabel(item.word, { width: 0.9, height: 0.32, size: 34 });
-    label.position.copy(item.position).add(new THREE.Vector3(0, 1.75, 0.1));
+    const label = createGasthausTextLabel(item.word, { width: 0.8, height: 0.3, size: 34 });
+    label.position.copy(item.position).add(new THREE.Vector3(0, 1.75, 0.12));
     label.userData.gasthausAction = `room:${item.word}`;
     root.add(label);
   }
-
-  const tableA = makeGasthausBox(
-    'Gasthaus_Table_A',
-    new THREE.Vector3(2.25, 0.42, -0.55),
-    new THREE.Vector3(1.65, 0.22, 1.1),
-    0x6a482a,
-  );
-  root.add(tableA);
-
-  const tableB = makeGasthausBox(
-    'Gasthaus_Table_B',
-    new THREE.Vector3(2.4, 0.42, 2.35),
-    new THREE.Vector3(1.4, 0.22, 1.0),
-    0x6a482a,
-  );
-  root.add(tableB);
-
-  const stairs = makeGasthausBox(
-    'Gasthaus_Stairs',
-    new THREE.Vector3(4.55, 0.55, -3.2),
-    new THREE.Vector3(1.15, 1.1, 2.2),
-    0x5b3825,
-  );
-  stairs.rotation.y = -0.35;
-  root.add(stairs);
 }
 
 function createGasthausNpcVisual(color) {
@@ -1978,33 +2060,63 @@ function createGasthausNpcVisual(color) {
   return group;
 }
 
-function createGasthausNpc(definition) {
-  if (getNpcById(definition.id)) {
-    return getNpcById(definition.id);
-  }
-
+function buildGasthausNpc(definition, rigged) {
   const root = new THREE.Group();
   root.name = definition.id;
   root.position.copy(definition.position);
   root.rotation.y = definition.yaw || 0;
 
-  const visual = createGasthausNpcVisual(definition.color || 0x6b7ba8);
-  root.add(visual);
+  let visual;
+  let mixer = null;
+  let mouth = null;
+  const embeddedAnimationNames = [];
+  let idleAnimationName = null;
+
+  if (rigged?.scene) {
+    visual = rigged.scene;
+    visual.name = `${definition.id}_visual`;
+    root.add(visual);
+    configureNpcModel(visual);
+
+    for (const clip of rigged.animations || []) {
+      const name = registerCharacterClip(clip, `${definition.label} ${clip.name || 'Idle'}`, {
+        loop: true,
+      });
+
+      if (name) {
+        embeddedAnimationNames.push(name);
+      }
+    }
+
+    idleAnimationName =
+      embeddedAnimationNames.find((name) => /idle|standing|breathing|mixamo/i.test(name)) ||
+      embeddedAnimationNames[0] ||
+      findAnimationByClipKeywords(['standing idle', 'idle', 'breathing']) ||
+      null;
+
+    mixer = new THREE.AnimationMixer(root);
+    // A real mouth means speakQuestLine() actually plays TTS audio (the old
+    // placeholder had mouth = null, which is why Frau Berta was silent).
+    mouth = new TextLipSync(root, { strength: 0.48, maxJaw: 0.34 });
+  } else {
+    visual = createGasthausNpcVisual(definition.color || 0x6b7ba8);
+    root.add(visual);
+  }
 
   const npc = {
     id: definition.id,
     label: definition.label,
     role: definition.role,
     aliases: definition.aliases,
-    voiceId: ELEVENLABS_VOICES.bella,
+    voiceId: definition.voiceId || ELEVENLABS_VOICES.bella,
     location: LOCATION_GASTHAUS,
     root,
     visual,
     model: visual,
-    mixer: null,
-    mouth: null,
-    embeddedAnimationNames: [],
-    idleAnimationName: null,
+    mixer,
+    mouth,
+    embeddedAnimationNames,
+    idleAnimationName,
     currentAction: null,
     currentAnimationName: null,
     path: [],
@@ -2020,21 +2132,83 @@ function createGasthausNpc(definition) {
     target: null,
     groundBiasY: 0,
     groundBiasDirty: false,
-    useProceduralIdle: true,
+    useProceduralIdle: !rigged,
     proceduralPhase: Math.random() * Math.PI * 2,
     proceduralBones: {},
     scriptedMovement: false,
     turnTargetYaw: null,
     finalYaw: null,
     stationary: true,
+    seated: Boolean(definition.seated),
+    // Keep tavern characters in a stable idle/seated loop and skip external
+    // gesture clips that could snap a baked rig into a T-pose mid-conversation.
+    lockIdle: Boolean(rigged),
   };
+
+  if (rigged) {
+    setupProceduralIdle(npc);
+    fitNpcVisualToGround(npc);
+  }
 
   npc.target = createNpcTargetFromNpc(npc);
   markNpcObjectTree(npc);
   gasthausRoot.add(root);
   npcById.set(npc.id, npc);
   npcs.push(npc);
+
+  if (rigged) {
+    if (npc.seated) {
+      applyGasthausSeatedIdle(npc);
+    } else {
+      playNpcIdle(npc, { fade: 0 });
+    }
+
+    npc.mixer.update(0);
+
+    if (!npc.seated) {
+      calibrateNpcGroundBias(npc);
+      npc.groundBiasDirty = false;
+      refitNpcToGround(npc);
+    }
+  }
+
   return npc;
+}
+
+function applyGasthausSeatedIdle(npc) {
+  const name =
+    findAnimationByClipKeywords(['sitting idle', 'sitting laughing', 'sitting']) ||
+    npc.idleAnimationName;
+
+  if (!name) {
+    return;
+  }
+
+  // Loop the seated clip as this NPC's "idle" so playNpcIdle keeps them seated.
+  npc.idleAnimationName = name;
+  npc.useProceduralIdle = false;
+  playNpcAnimation(npc, name, { loop: true, fade: 0 });
+}
+
+async function loadGasthausNpc(definition) {
+  if (getNpcById(definition.id)) {
+    return getNpcById(definition.id);
+  }
+
+  let rigged = null;
+
+  if (definition.modelUrl) {
+    try {
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      rigged = await loadGltf(loader, definition.modelUrl);
+    } catch (error) {
+      console.warn(`Gasthaus character ${definition.id} failed, using placeholder:`, error);
+      rigged = null;
+    }
+  }
+
+  return buildGasthausNpc(definition, rigged);
 }
 
 function createQuestThreeNpc(definition) {
@@ -2180,9 +2354,15 @@ async function ensureGasthausLoaded() {
     buildGasthausOverlay(gasthausRoot);
   }
 
-  for (const npcDef of GASTHAUS_NPCS) {
-    createGasthausNpc(npcDef);
-  }
+  // Seated tavern guests loop a Mixamo sitting clip; make sure it is registered
+  // before the characters are built.
+  const clipLoader = new GLTFLoader();
+  clipLoader.setMeshoptDecoder(MeshoptDecoder);
+  await loadBodyAnimationClips(clipLoader, GASTHAUS_SITTING_CLIP_URLS);
+
+  await Promise.all(GASTHAUS_NPCS.map((npcDef) => loadGasthausNpc(npcDef)));
+  syncAllNpcTargets();
+  renderTargets();
 
   locationState.gasthausLoaded = true;
 }
@@ -2237,8 +2417,13 @@ async function enterGasthaus() {
     await ensureGasthausLoaded();
     setLocation(LOCATION_GASTHAUS);
     agent.position.copy(GASTHAUS_PLAYER_SPAWN);
-    agent.yaw = Math.PI;
-    lookYaw = Math.PI;
+
+    // Face the bar/innkeeper on entry so the player sees Frau Berta immediately.
+    const berta = getBerta();
+    lookYaw = berta
+      ? Math.atan2(berta.root.position.x - agent.position.x, berta.root.position.z - agent.position.z)
+      : Math.PI;
+    agent.yaw = lookYaw;
     lookPitch = -0.05;
     gasthausSetStatus('познакомьтесь с Frau Berta');
     renderGasthausChips();
@@ -3025,6 +3210,9 @@ function makeNpcSlot(index, url) {
       aliases: [QUEST_GUARD_LABEL, 'bruno', 'guard', 'wachmann', 'wache', 'стражник', 'охранник'],
       homeTargetIds: [],
       stationary: true,
+      // Scope the guard to the village so his marker and updates never leak
+      // into the Gasthaus interior (a separate location).
+      location: LOCATION_VILLAGE,
     };
   }
 
@@ -3037,6 +3225,7 @@ function makeNpcSlot(index, url) {
     voiceId: getNpcVoiceId(label, index),
     aliases: [label, 'npc', 'person', 'character'],
     homeTargetIds: NPC_HOME_TARGET_SETS[index % NPC_HOME_TARGET_SETS.length],
+    location: LOCATION_VILLAGE,
   };
 }
 
@@ -3390,9 +3579,10 @@ function playNpcAnimation(npc, animationName, options = {}) {
 
 function playNpcPreferredAnimation(npc, keywords, options = {}) {
   // The rigged, lip-synced guard has no gesture clips that retarget onto his
-  // skeleton, so any external clip would leave him in a T-pose. Keep him in his
-  // bound embedded idle no matter which gesture is requested.
-  if (isQuestGuard(npc) && !options.allowQuestGuardExternal) {
+  // skeleton, so any external clip would leave him in a T-pose. Keep him - and
+  // the idle-locked tavern characters - in their bound idle/seated loop no
+  // matter which gesture is requested.
+  if ((isQuestGuard(npc) || npc.lockIdle) && !options.allowQuestGuardExternal) {
     if (npc.currentAnimationName !== npc.idleAnimationName) {
       playNpcIdle(npc);
     }
@@ -3991,13 +4181,19 @@ function updateNpcs(deltaTime) {
 
     npc.mixer?.update(deltaTime);
 
-    if (npc.groundBiasDirty) {
+    if (npc.groundBiasDirty && !npc.seated) {
       calibrateNpcGroundBias(npc);
       npc.groundBiasDirty = false;
     }
 
     updateProceduralIdle(npc, now);
-    refitNpcToGround(npc);
+
+    // Seated characters are grounded once at spawn; re-grounding every frame
+    // would fight the sitting animation's hip motion and make them bob.
+    if (!npc.seated) {
+      refitNpcToGround(npc);
+    }
+
     npc.mouth?.update(deltaTime);
 
     if (npc.state === 'talking' && now > npc.talkUntil && !npc.mouth?.active) {
@@ -4366,6 +4562,7 @@ function finishQuestSuccess(npc) {
   questState.stage = 'success';
   renderQuestChips([]);
   setQuestStatus('Квест выполнен: Der Wachmann');
+  showSceneHint('Иди в центр деревни и отдохни в Gasthaus', 9000);
   npc.afterTalk = () => {
     startQuestGuardOpenMove(npc);
   };
@@ -4722,8 +4919,9 @@ function chooseDialogueAnimationKeywords(payload) {
 function playNpcDialogueAnimation(npc, payload) {
   // The rigged, lip-synced guard talks through mouth morphs. External gesture
   // clips may not retarget onto his skeleton and would snap him into a T-pose,
-  // so keep him in his reliable embedded idle and let the lips carry it.
-  if (isQuestGuard(npc)) {
+  // so keep him - and the idle-locked tavern characters - in their reliable
+  // idle/seated loop and let the lips carry the talking.
+  if (isQuestGuard(npc) || npc.lockIdle) {
     if (npc.currentAnimationName !== npc.idleAnimationName) {
       playNpcIdle(npc);
     }
