@@ -83,11 +83,10 @@ const QUEST_POINTS = {
   well: new THREE.Vector3(34.2, 4.82, 115.5),
 };
 const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
-// Used only when the asset manifest reports no rigged characters (e.g. a fresh
-// deploy before the *.rigged.glb officer is committed) so the gate still has a
-// guard to talk to.
+// Used only when the asset manifest reports no rigged characters, so the gate
+// still has a guard to talk to.
 const QUEST_GUARD_MODEL_FALLBACK_URL =
-  '/Mixamo/glb/Idle%20Meshy_AI_Police_Officer_in_T_P_0705154259_texture.glb';
+  '/Mixamo/characters/Idle%20Meshy_AI_Police_Officer_in_T_P_0705154259_texture_YUP_baked.rigged.glb';
 const QUEST_WALKABLE_RECTS = [
   { name: 'Quest_Walkable_Gate_Approach', x: 58.8, y: 4.82, z: 132.0, sx: 9, sz: 28 },
   { name: 'Quest_Walkable_Main_Street', x: 58.8, y: 4.82, z: 91.0, sx: 9, sz: 62 },
@@ -1185,8 +1184,10 @@ function makeNpcSlot(index, url) {
     return {
       id: QUEST_GUARD_ID,
       label: QUEST_GUARD_LABEL,
-      role: 'village gate guard',
-      voiceId: ELEVENLABS_VOICES.arnold,
+      role: 'Bruno, the friendly and calm gate guard of Grünbach village',
+      // Calm, warm voice (not the loud Arnold) so he doesn't come across as
+      // shouting.
+      voiceId: ELEVENLABS_VOICES.adam,
       idleKeywords: ['idle default beliner', 'idle default', 'standing idle'],
       aliases: [QUEST_GUARD_LABEL, 'bruno', 'guard', 'wachmann', 'wache', 'стражник', 'охранник'],
       homeTargetIds: [],
@@ -1540,6 +1541,17 @@ function playNpcAnimation(npc, animationName, options = {}) {
 }
 
 function playNpcPreferredAnimation(npc, keywords, options = {}) {
+  // The rigged, lip-synced guard has no gesture clips that retarget onto his
+  // skeleton, so any external clip would leave him in a T-pose. Keep him in his
+  // bound embedded idle no matter which gesture is requested.
+  if (isQuestGuard(npc)) {
+    if (npc.currentAnimationName !== npc.idleAnimationName) {
+      playNpcIdle(npc);
+    }
+
+    return npc.currentAnimationName === npc.idleAnimationName;
+  }
+
   const name = findAnimationByClipKeywords(keywords);
 
   if (!name) {
@@ -1554,6 +1566,12 @@ function playNpcPreferredAnimation(npc, keywords, options = {}) {
 }
 
 function playNpcIdle(npc, options = {}) {
+  // A procedurally-posed character drives its own body; don't fight it with an
+  // unbindable clip.
+  if (npc?.useProceduralIdle) {
+    return false;
+  }
+
   if (npc?.idleAnimationName && characterAnimations.has(npc.idleAnimationName)) {
     return playNpcAnimation(npc, npc.idleAnimationName, {
       loop: true,
@@ -1569,6 +1587,55 @@ function playNpcIdle(npc, options = {}) {
 
 function playNpcWalk(npc) {
   return playNpcPreferredAnimation(npc, ['walking', 'walk'], { loop: true });
+}
+
+// Fallback for characters with no bindable idle clip: pose the arms down out of
+// the Mixamo T-pose and add a gentle breathing sway, so the model is never
+// frozen with arms straight out. No-op when a real idle animation exists.
+function setupProceduralIdle(npc) {
+  if (!npc?.visual || npc.idleAnimationName) {
+    return;
+  }
+
+  const bones = {};
+
+  npc.visual.traverse((object) => {
+    if (!object.isBone) {
+      return;
+    }
+
+    const name = object.name.toLowerCase();
+
+    if (name.includes('leftarm') && !name.includes('fore')) {
+      bones.leftArm = object;
+    } else if (name.includes('rightarm') && !name.includes('fore')) {
+      bones.rightArm = object;
+    } else if (!bones.spine && /spine1?$/.test(name)) {
+      bones.spine = object;
+    }
+  });
+
+  // Rotate the upper arms down toward the body (T-pose -> relaxed A-pose).
+  if (bones.leftArm) {
+    bones.leftArm.rotation.z += 1.15;
+  }
+
+  if (bones.rightArm) {
+    bones.rightArm.rotation.z -= 1.15;
+  }
+
+  npc.proceduralBones = bones;
+  npc.proceduralSpineBaseX = bones.spine ? bones.spine.rotation.x : 0;
+  npc.proceduralPhase = Math.random() * Math.PI * 2;
+  npc.useProceduralIdle = true;
+}
+
+function updateProceduralIdle(npc, elapsed) {
+  const spine = npc?.useProceduralIdle ? npc.proceduralBones?.spine : null;
+
+  if (spine) {
+    spine.rotation.x = npc.proceduralSpineBaseX + Math.sin(elapsed * 1.4 + npc.proceduralPhase) * 0.035;
+  }
 }
 
 function angleToAgent(point) {
@@ -1654,11 +1721,14 @@ function createNpcFromGltf(gltf, url, index, total) {
     }
   }
 
+  // Prefer the model's OWN embedded clip: it is authored for this exact
+  // skeleton so it always binds. External Mixamo body clips may fail to
+  // retarget onto a rigged character and leave it frozen in its T-pose.
   const idleAnimationName =
-    (slot.idleKeywords?.length ? findAnimationByClipKeywords(slot.idleKeywords) : null) ||
     embeddedAnimationNames.find((name) => /idle|standing|breathing|mixamo/i.test(name)) ||
-    findAnimationByClipKeywords(['standing idle', 'idle', 'breathing']) ||
     embeddedAnimationNames[0] ||
+    (slot.idleKeywords?.length ? findAnimationByClipKeywords(slot.idleKeywords) : null) ||
+    findAnimationByClipKeywords(['standing idle', 'idle', 'breathing']) ||
     null;
 
   root.name = slot.id;
@@ -1690,8 +1760,10 @@ function createNpcFromGltf(gltf, url, index, total) {
     target: null,
     groundBiasY: 0,
     groundBiasDirty: false,
+    useProceduralIdle: false,
   };
 
+  setupProceduralIdle(npc);
   fitNpcVisualToGround(npc);
   npc.target = createNpcTargetFromNpc(npc);
   markNpcObjectTree(npc);
@@ -1944,6 +2016,7 @@ function updateNpcs(deltaTime) {
       npc.groundBiasDirty = false;
     }
 
+    updateProceduralIdle(npc, now);
     refitNpcToGround(npc);
     npc.mouth?.update(deltaTime);
 
@@ -2430,14 +2503,13 @@ function updateQuest() {
   if (!questState.alerted && distance <= QUEST_TRIGGER_ALERT) {
     questState.alerted = true;
     faceNpcToAgent(npc, 1);
-    playNpcPreferredAnimation(npc, ['look around', 'thinking', 'acknowledging'], { restart: true });
     setQuestStatus('Стражник заметил вас');
   }
 
   if (!questState.halted && distance <= QUEST_TRIGGER_HALT) {
     questState.halted = true;
     faceNpcToAgent(npc, 1);
-    speakQuestLine(npc, 'Halt!', 'Стой!', { intent: 'negative' });
+    // Bruno stops the player and draws them in without shouting "Halt!".
     holdPlayerAtGuard(npc);
   }
 
@@ -2510,7 +2582,7 @@ function renderDialogueHeader() {
 
   const target = selectedNpc || nearbyNpc;
 
-  if (isQuestGuard(target) && questState.currentLine) {
+  if (isQuestGuard(target) && questState.currentLine && !questState.completed) {
     renderQuestSpeechLine();
     interactNpcButton.disabled = false;
     dialogueInput.disabled = false;
@@ -2591,6 +2663,17 @@ function chooseDialogueAnimationKeywords(payload) {
 }
 
 function playNpcDialogueAnimation(npc, payload) {
+  // The rigged, lip-synced guard talks through mouth morphs. External gesture
+  // clips may not retarget onto his skeleton and would snap him into a T-pose,
+  // so keep him in his reliable embedded idle and let the lips carry it.
+  if (isQuestGuard(npc)) {
+    if (npc.currentAnimationName !== npc.idleAnimationName) {
+      playNpcIdle(npc);
+    }
+
+    return;
+  }
+
   const keywords = chooseDialogueAnimationKeywords(payload);
   const played = playNpcPreferredAnimation(npc, keywords, { restart: true });
 
@@ -2604,7 +2687,7 @@ function openDialogueWithNpc(npc, options = {}) {
     return;
   }
 
-  if (isQuestGuard(npc)) {
+  if (isQuestGuard(npc) && !questState.completed) {
     openQuestDialogue(npc);
     return;
   }
@@ -2616,10 +2699,19 @@ function openDialogueWithNpc(npc, options = {}) {
   npc.waitTimer = 1.2;
   faceNpcToAgent(npc, 1);
   faceAgentToNpc(npc);
-  playNpcPreferredAnimation(npc, ['standing greeting', 'waving', 'acknowledging'], {
-    loop: false,
-    restart: true,
-  });
+
+  if (isQuestGuard(npc)) {
+    // Post-quest Bruno keeps his reliable idle (a gesture clip would T-pose him).
+    if (npc.currentAnimationName !== npc.idleAnimationName) {
+      playNpcIdle(npc);
+    }
+  } else {
+    playNpcPreferredAnimation(npc, ['standing greeting', 'waving', 'acknowledging'], {
+      loop: false,
+      restart: true,
+    });
+  }
+
   setStatus(`Talking to ${npc.label}`, 'ready');
 }
 
@@ -2652,7 +2744,10 @@ async function sendDialogueToNpc(npc, message) {
     return;
   }
 
-  if (isQuestGuard(npc)) {
+  // During the quest Bruno runs the scripted FSM. Once he has let the player in
+  // ("Komm rein!"), he becomes a normal AI conversation partner who answers
+  // follow-up questions in character.
+  if (isQuestGuard(npc) && !questState.completed) {
     sendQuestDialogueToGuard(npc, line);
     return;
   }
@@ -2734,135 +2829,172 @@ function submitDialogueLine() {
 }
 
 // --- Voice input (speech-to-text) ---------------------------------------
-// Lets the player speak their German answer. The recognised text lands in the
-// dialogue line and is submitted through the normal pipeline, so the guard FSM
-// (or the AI for other NPCs) evaluates it and either advances or asks to repeat.
-const SpeechRecognitionImpl =
-  typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
-
-const speechDictation = {
-  supported: Boolean(SpeechRecognitionImpl),
-  recognition: null,
-  listening: false,
-  finalTranscript: '',
+// Records the microphone with MediaRecorder and transcribes it on the server
+// (/api/stt), so speaking works in every modern browser (Chrome, Firefox,
+// Safari, Edge) rather than only those with the Web Speech API. The recognised
+// text lands in the dialogue line and is submitted through the normal pipeline,
+// so the guard FSM (or the AI) evaluates it and advances or asks to repeat.
+const dictation = {
+  supported:
+    typeof navigator !== 'undefined' &&
+    Boolean(navigator.mediaDevices?.getUserMedia) &&
+    typeof window !== 'undefined' &&
+    typeof window.MediaRecorder !== 'undefined',
+  state: 'idle', // 'idle' | 'recording' | 'transcribing'
+  recorder: null,
+  stream: null,
+  chunks: [],
 };
+
+function pickAudioMimeType() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+
+  for (const type of candidates) {
+    if (window.MediaRecorder?.isTypeSupported?.(type)) {
+      return type;
+    }
+  }
+
+  return '';
+}
 
 function updateMicButton() {
   if (!micButton) {
     return;
   }
 
-  if (!speechDictation.supported) {
+  if (!dictation.supported) {
     micButton.disabled = true;
     micButton.classList.remove('listening');
-    micButton.title = 'Голосовой ввод не поддерживается в этом браузере (нужен Chrome/Edge)';
+    micButton.title = 'Голосовой ввод недоступен: нужен доступ к микрофону в современном браузере';
     return;
   }
 
-  micButton.classList.toggle('listening', speechDictation.listening);
-  micButton.title = speechDictation.listening
-    ? 'Идёт запись — нажмите, чтобы остановить'
-    : 'Ответить голосом (немецкий)';
+  micButton.classList.toggle('listening', dictation.state === 'recording');
+  micButton.disabled = dictation.state === 'transcribing';
+  micButton.title =
+    dictation.state === 'recording'
+      ? 'Идёт запись — нажмите, чтобы остановить и распознать'
+      : dictation.state === 'transcribing'
+        ? 'Распознаю…'
+        : 'Ответить голосом';
 }
 
-function stopDictation() {
-  if (speechDictation.recognition && speechDictation.listening) {
-    try {
-      speechDictation.recognition.stop();
-    } catch (error) {
-      /* ignore */
+function stopMicStream() {
+  if (dictation.stream) {
+    for (const track of dictation.stream.getTracks()) {
+      track.stop();
     }
+
+    dictation.stream = null;
   }
 }
 
-function startDictation() {
-  if (!speechDictation.supported) {
-    setStatus('Голосовой ввод недоступен: откройте игру в Chrome или Edge', 'error');
-    return;
-  }
+async function transcribeRecording(blob, mimeType) {
+  dictation.state = 'transcribing';
+  updateMicButton();
+  setStatus('Распознаю…', 'ready');
 
-  if (speechDictation.listening) {
-    stopDictation();
-    return;
-  }
+  try {
+    const response = await fetch('/api/stt?lang=de', {
+      method: 'POST',
+      headers: { 'Content-Type': mimeType || 'audio/webm' },
+      body: blob,
+    });
+    const payload = await response.json().catch(() => ({}));
 
-  // The click is a user gesture, so this is a good moment to unlock NPC audio.
-  requestGameAudioUnlock();
+    if (!response.ok) {
+      throw new Error(payload.error || `STT ${response.status}`);
+    }
 
-  const recognition = new SpeechRecognitionImpl();
-  recognition.lang = 'de-DE';
-  recognition.interimResults = true;
-  recognition.continuous = false;
-  recognition.maxAlternatives = 1;
+    const text = String(payload.text || '').trim();
 
-  speechDictation.recognition = recognition;
-  speechDictation.finalTranscript = '';
-
-  recognition.onstart = () => {
-    speechDictation.listening = true;
-    updateMicButton();
-    setStatus('🎤 Говорите по-немецки…', 'ready');
-  };
-
-  recognition.onresult = (event) => {
-    let interim = '';
-
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
-      const transcript = event.results[i][0].transcript;
-
-      if (event.results[i].isFinal) {
-        speechDictation.finalTranscript += transcript;
-      } else {
-        interim += transcript;
-      }
+    if (!text) {
+      setStatus('Не расслышал. Нажмите 🎤 и повторите.', 'error');
+      return;
     }
 
     if (dialogueInput) {
-      dialogueInput.value = `${speechDictation.finalTranscript}${interim}`.trim();
-    }
-  };
-
-  recognition.onerror = (event) => {
-    speechDictation.listening = false;
-    updateMicButton();
-
-    const messages = {
-      'not-allowed': 'Доступ к микрофону запрещён. Разрешите его в настройках браузера.',
-      'service-not-allowed': 'Доступ к микрофону запрещён. Разрешите его в настройках браузера.',
-      'no-speech': 'Не расслышал. Нажмите 🎤 и повторите.',
-      'audio-capture': 'Микрофон не найден. Проверьте устройство.',
-      network: 'Нет сети для распознавания речи.',
-      aborted: '',
-    };
-
-    const message = event.error in messages ? messages[event.error] : `Ошибка распознавания: ${event.error}`;
-
-    if (message) {
-      setStatus(message, 'error');
-    }
-  };
-
-  recognition.onend = () => {
-    speechDictation.listening = false;
-    speechDictation.recognition = null;
-    updateMicButton();
-
-    const text = speechDictation.finalTranscript.trim();
-
-    if (text && dialogueInput) {
+      // Show the player what they said, then run it through evaluation.
       dialogueInput.value = text;
       submitDialogueLine();
     }
-  };
+  } catch (error) {
+    setStatus(error.message || 'Не удалось распознать речь', 'error');
+  } finally {
+    dictation.state = 'idle';
+    updateMicButton();
+  }
+}
+
+async function startDictation() {
+  if (!dictation.supported) {
+    setStatus('Голосовой ввод недоступен в этом браузере', 'error');
+    return;
+  }
+
+  // Second press stops the recording, which triggers transcription.
+  if (dictation.state === 'recording') {
+    dictation.recorder?.stop();
+    return;
+  }
+
+  if (dictation.state === 'transcribing') {
+    return;
+  }
+
+  // The click is a user gesture — a good moment to unlock NPC audio too.
+  requestGameAudioUnlock();
 
   try {
-    recognition.start();
+    dictation.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (error) {
-    speechDictation.listening = false;
-    speechDictation.recognition = null;
-    updateMicButton();
-    setStatus('Не удалось запустить микрофон. Попробуйте ещё раз.', 'error');
+    setStatus('Доступ к микрофону запрещён. Разрешите его в браузере.', 'error');
+    return;
   }
+
+  const mimeType = pickAudioMimeType();
+  const recorder = mimeType
+    ? new MediaRecorder(dictation.stream, { mimeType })
+    : new MediaRecorder(dictation.stream);
+  dictation.recorder = recorder;
+  dictation.chunks = [];
+
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      dictation.chunks.push(event.data);
+    }
+  };
+
+  recorder.onstop = async () => {
+    stopMicStream();
+    const type = recorder.mimeType || mimeType || 'audio/webm';
+    const blob = new Blob(dictation.chunks, { type });
+    dictation.chunks = [];
+    dictation.recorder = null;
+
+    if (blob.size < 1200) {
+      dictation.state = 'idle';
+      updateMicButton();
+      setStatus('Слишком коротко. Нажмите 🎤 и говорите.', 'error');
+      return;
+    }
+
+    await transcribeRecording(blob, type);
+  };
+
+  recorder.onerror = () => {
+    stopMicStream();
+    dictation.state = 'idle';
+    dictation.recorder = null;
+    updateMicButton();
+    setStatus('Ошибка записи микрофона', 'error');
+  };
+
+  recorder.start();
+  dictation.state = 'recording';
+  updateMicButton();
+  setStatus('🎤 Запись… нажмите 🎤 ещё раз, когда закончите', 'ready');
 }
 
 function exportCustomTargets() {

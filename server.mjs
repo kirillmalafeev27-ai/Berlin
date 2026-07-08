@@ -70,11 +70,13 @@ const mimeTypes = new Map([
   ['.jpeg', 'image/jpeg'],
 ]);
 
-// Stable URL prefix the game uses for character/animation GLBs. The real
-// files may sit at ./Mixamo/glb (legacy layout) or ./public/assets/mixamo/glb
-// (committed layout); we resolve whichever exists and alias both to this URL.
-const MIXAMO_URL_PREFIX = '/Mixamo/glb/';
-const MIXAMO_DIR_CANDIDATES = ['Mixamo/glb', 'public/assets/mixamo/glb'];
+// Stable URL prefix the game uses for character/animation GLBs. The real files
+// may sit under ./Mixamo (legacy layout) or ./public/assets/mixamo (committed
+// layout); we resolve whichever base exists and alias its whole tree — so both
+// /Mixamo/glb/<clip> (body animations) and /Mixamo/characters/<model> (rigged
+// characters) resolve.
+const MIXAMO_URL_PREFIX = '/Mixamo/';
+const MIXAMO_BASE_CANDIDATES = ['Mixamo', 'public/assets/mixamo'];
 
 function firstExistingDir(candidates) {
   for (const relativeDir of candidates) {
@@ -88,10 +90,12 @@ function firstExistingDir(candidates) {
   return candidates[0];
 }
 
-const mixamoDir = firstExistingDir(MIXAMO_DIR_CANDIDATES);
+const mixamoBaseDir = firstExistingDir(MIXAMO_BASE_CANDIDATES);
 const animationSearchDirs = ['', 'animations', 'mixamo', 'assets'];
-const riggedCharacterDirs = [mixamoDir];
-const bodyAnimationDir = mixamoDir;
+// Rigged, lip-synced characters live under characters/; Mixamo body-animation
+// clips under glb/.
+const riggedCharacterDirs = [path.join(mixamoBaseDir, 'characters'), path.join(mixamoBaseDir, 'glb')];
+const bodyAnimationDir = path.join(mixamoBaseDir, 'glb');
 const characterFile = 'Meshy_AI_Character_output.fbx';
 const bodyAnimationFiles = new Set([
   'Acknowledging.glb',
@@ -133,11 +137,13 @@ function assetUrl(relativePath) {
   return `/${relativePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')}`;
 }
 
-// Character/animation GLBs are always exposed under the stable /Mixamo/glb/
-// prefix regardless of where the file physically lives.
+// Expose a mixamo file under the stable /Mixamo/<subpath> alias, preserving the
+// glb/ vs characters/ subdirectory regardless of where the base lives on disk.
 function mixamoAssetUrl(relativePath) {
-  const name = path.basename(relativePath);
-  return MIXAMO_URL_PREFIX + encodeURIComponent(name);
+  const normalized = relativePath.replace(/\\/g, '/');
+  const base = mixamoBaseDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const sub = normalized.startsWith(`${base}/`) ? normalized.slice(base.length + 1) : path.basename(normalized);
+  return MIXAMO_URL_PREFIX + sub.split('/').map(encodeURIComponent).join('/');
 }
 
 // Resolve a URL path to an on-disk file, trying the repo root first and then
@@ -161,11 +167,11 @@ function resolveStaticFile(pathname) {
   return null;
 }
 
-// Serve the stable /Mixamo/glb/<file> alias from whichever real directory exists.
+// Serve the stable /Mixamo/<subpath> alias from whichever real base exists.
 function resolveMixamoFile(pathname) {
-  const name = decodeURIComponent(pathname.slice(MIXAMO_URL_PREFIX.length));
-  const dir = path.resolve(root, mixamoDir);
-  const filePath = path.resolve(dir, name);
+  const sub = decodeURIComponent(pathname.slice(MIXAMO_URL_PREFIX.length));
+  const dir = path.resolve(root, mixamoBaseDir);
+  const filePath = path.resolve(dir, sub);
 
   if (!filePath.startsWith(dir) || !existsSync(filePath)) {
     return null;
@@ -471,12 +477,16 @@ async function callRemoteDialogue(input, fallback) {
 
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const system = [
-    'You are the dialogue engine for a playable 3D city prototype.',
-    'Do not advance or invent story. Stay generic, diegetic, and concise.',
-    'Answer in the same language as the player when possible.',
+    'You role-play a non-player character in a German-learning village game (Grünbach).',
+    'The player is a beginner learning German.',
+    'Stay fully in character from npc.role and npc.label (e.g. Bruno, the friendly gate guard).',
+    'Always answer in simple, correct German at A1 level: 1-2 short sentences, common words, present tense.',
+    'Be warm, calm and encouraging. Never shout and never use ALL CAPS or many exclamation marks.',
+    'You may gently correct the player in one short clause, then answer their question.',
+    'Keep it small and everyday; do not invent a big plot or leave the village.',
     'Return only JSON with fields: reply, animationIntent, animationKeywords.',
     'Do not prefix the reply with the NPC name.',
-    'animationKeywords must be 1-3 existing-style Mixamo animation hints like thinking, waving, thankful, talking at watercooler, shaking head no, standing greeting, laughing, pointing forward.',
+    'animationKeywords must be 1-3 calm Mixamo hints like talking at watercooler, thinking, waving, standing greeting, pointing forward, acknowledging, thankful.',
   ].join(' ');
 
   const remoteResponse = await fetch(endpoint, {
@@ -613,6 +623,138 @@ async function handleTts(request, response) {
   }
 }
 
+function readRawBody(request, limit = 16 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+
+    request.on('data', (chunk) => {
+      size += chunk.length;
+
+      if (size > limit) {
+        reject(new Error('Audio body is too large'));
+        request.destroy();
+        return;
+      }
+
+      chunks.push(chunk);
+    });
+    request.on('end', () => resolve(Buffer.concat(chunks)));
+    request.on('error', reject);
+  });
+}
+
+// Transcribe with ElevenLabs Scribe (reuses the TTS key). Returns null when no
+// key is configured so the caller can try the next provider.
+async function transcribeWithElevenLabs(audio, contentType, language) {
+  const apiKey = process.env.ELEVENLABS_API_KEY || '';
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const form = new FormData();
+  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), 'speech.webm');
+  form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
+
+  if (language) {
+    form.append('language_code', language);
+  }
+
+  const remoteResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey },
+    body: form,
+  });
+
+  if (!remoteResponse.ok) {
+    throw new Error(`ElevenLabs STT ${remoteResponse.status}: ${await remoteResponse.text()}`);
+  }
+
+  const data = await remoteResponse.json();
+  return String(data.text || '').trim();
+}
+
+// Fallback: any OpenAI-compatible /audio/transcriptions endpoint (Whisper).
+async function transcribeWithWhisper(audio, contentType, language) {
+  const baseUrl =
+    process.env.AI_TUNNEL_BASE_URL ||
+    process.env.AI_BASE_URL ||
+    process.env.OPENAI_BASE_URL ||
+    DEFAULT_AI_TUNNEL_BASE_URL;
+  const apiKey =
+    process.env.AI_TUNNEL_API_KEY || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '';
+
+  if (!baseUrl || !apiKey) {
+    return null;
+  }
+
+  const form = new FormData();
+  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), 'speech.webm');
+  form.append('model', process.env.STT_MODEL || 'whisper-1');
+
+  if (language) {
+    form.append('language', language);
+  }
+
+  const remoteResponse = await fetch(`${baseUrl.replace(/\/$/, '')}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+
+  if (!remoteResponse.ok) {
+    throw new Error(`Whisper STT ${remoteResponse.status}: ${await remoteResponse.text()}`);
+  }
+
+  const data = await remoteResponse.json();
+  return String(data.text || '').trim();
+}
+
+async function handleStt(request, response) {
+  try {
+    const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
+    const language = url.searchParams.get('lang') || 'de';
+    const contentType = request.headers['content-type'] || 'audio/webm';
+    const audio = await readRawBody(request);
+
+    if (!audio.length) {
+      sendJson(response, 400, { error: 'Пустая аудиозапись' });
+      return;
+    }
+
+    const errors = [];
+    let text = null;
+
+    for (const transcribe of [transcribeWithElevenLabs, transcribeWithWhisper]) {
+      try {
+        const result = await transcribe(audio, contentType, language);
+
+        if (result !== null && result !== undefined) {
+          text = result;
+          break;
+        }
+      } catch (error) {
+        console.warn(error.message);
+        errors.push(error.message);
+      }
+    }
+
+    if (text === null) {
+      sendJson(response, 503, {
+        error:
+          'Распознавание речи не настроено на сервере (нужен ELEVENLABS_API_KEY или AI_TUNNEL_API_KEY).',
+        detail: errors.join(' | ') || undefined,
+      });
+      return;
+    }
+
+    sendJson(response, 200, { text });
+  } catch (error) {
+    sendJson(response, 400, { error: error.message || 'STT failed' });
+  }
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
 
@@ -628,6 +770,11 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === '/api/tts' && request.method === 'POST') {
     await handleTts(request, response);
+    return;
+  }
+
+  if (url.pathname === '/api/stt' && request.method === 'POST') {
+    await handleStt(request, response);
     return;
   }
 

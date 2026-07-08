@@ -267,7 +267,9 @@ export class TextLipSync {
     const duration = alignmentDuration(track) || estimateDuration(text);
 
     audio.preload = 'auto';
-    audio.volume = 1;
+    // Keep NPC speech at a comfortable level so characters don't sound like
+    // they are shouting at the player.
+    audio.volume = 0.7;
     audio.muted = false;
     audio.playsInline = true;
     this.connectAudioElement(audio);
