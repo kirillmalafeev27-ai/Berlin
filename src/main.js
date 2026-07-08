@@ -82,7 +82,7 @@ const QUEST_POINTS = {
   market: new THREE.Vector3(78.0, 4.82, 73.0),
   well: new THREE.Vector3(34.2, 4.82, 115.5),
 };
-const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
+const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Talking%20At%20Watercooler.glb';
 // Used only when the asset manifest reports no rigged characters, so the gate
 // still has a guard to talk to.
 const QUEST_GUARD_MODEL_FALLBACK_URL =
@@ -1188,7 +1188,7 @@ function makeNpcSlot(index, url) {
       // Calm, warm voice (not the loud Arnold) so he doesn't come across as
       // shouting.
       voiceId: ELEVENLABS_VOICES.adam,
-      idleKeywords: ['idle default beliner', 'idle default', 'standing idle'],
+      idleKeywords: ['talking at watercooler'],
       aliases: [QUEST_GUARD_LABEL, 'bruno', 'guard', 'wachmann', 'wache', 'стражник', 'охранник'],
       homeTargetIds: [],
       stationary: true,
@@ -1541,9 +1541,9 @@ function playNpcAnimation(npc, animationName, options = {}) {
 }
 
 function playNpcPreferredAnimation(npc, keywords, options = {}) {
-  // The rigged, lip-synced guard has no gesture clips that retarget onto his
-  // skeleton, so any external clip would leave him in a T-pose. Keep him in his
-  // bound embedded idle no matter which gesture is requested.
+  // The guard's base clip is the calm talking body motion. Keep that same body
+  // animation for every requested gesture; mouth morphs are driven separately
+  // only while speech audio/text is active.
   if (isQuestGuard(npc)) {
     if (npc.currentAnimationName !== npc.idleAnimationName) {
       playNpcIdle(npc);
@@ -1721,15 +1721,16 @@ function createNpcFromGltf(gltf, url, index, total) {
     }
   }
 
-  // Prefer the model's OWN embedded clip: it is authored for this exact
-  // skeleton so it always binds. External Mixamo body clips may fail to
-  // retarget onto a rigged character and leave it frozen in its T-pose.
-  const idleAnimationName =
+  const slotIdleAnimationName = slot.idleKeywords?.length ? findAnimationByClipKeywords(slot.idleKeywords) : null;
+  const embeddedIdleAnimationName =
     embeddedAnimationNames.find((name) => /idle|standing|breathing|mixamo/i.test(name)) ||
     embeddedAnimationNames[0] ||
-    (slot.idleKeywords?.length ? findAnimationByClipKeywords(slot.idleKeywords) : null) ||
-    findAnimationByClipKeywords(['standing idle', 'idle', 'breathing']) ||
     null;
+  const defaultIdleAnimationName = findAnimationByClipKeywords(['standing idle', 'idle', 'breathing']);
+  const idleAnimationName =
+    slot.id === QUEST_GUARD_ID
+      ? slotIdleAnimationName || embeddedIdleAnimationName || defaultIdleAnimationName || null
+      : embeddedIdleAnimationName || slotIdleAnimationName || defaultIdleAnimationName || null;
 
   root.name = slot.id;
   visual.name = `${slot.id}_visual`;
@@ -2663,9 +2664,8 @@ function chooseDialogueAnimationKeywords(payload) {
 }
 
 function playNpcDialogueAnimation(npc, payload) {
-  // The rigged, lip-synced guard talks through mouth morphs. External gesture
-  // clips may not retarget onto his skeleton and would snap him into a T-pose,
-  // so keep him in his reliable embedded idle and let the lips carry it.
+  // The guard already idles with the talk body clip. Dialogue only adds
+  // lip-sync; when speech ends, playNpcIdle keeps this same no-lips base motion.
   if (isQuestGuard(npc)) {
     if (npc.currentAnimationName !== npc.idleAnimationName) {
       playNpcIdle(npc);
