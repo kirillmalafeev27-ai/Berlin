@@ -2915,8 +2915,9 @@ async function transcribeRecording(blob, mimeType) {
     }
 
     if (dialogueInput) {
-      // Show the player what they said, then run it through evaluation.
+      // Show the player what was recognised, then run it through evaluation.
       dialogueInput.value = text;
+      setStatus(`Вы сказали: «${text}»`, 'ready');
       submitDialogueLine();
     }
   } catch (error) {

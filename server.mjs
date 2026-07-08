@@ -644,55 +644,53 @@ function readRawBody(request, limit = 16 * 1024 * 1024) {
   });
 }
 
-// Transcribe with ElevenLabs Scribe (reuses the TTS key). Returns null when no
-// key is configured so the caller can try the next provider.
-async function transcribeWithElevenLabs(audio, contentType, language) {
-  const apiKey = process.env.ELEVENLABS_API_KEY || '';
+// Whisper detects the audio format from the filename, so an mp4/ogg recording
+// sent as .webm can be rejected. Map the recorder's content-type to a matching
+// extension.
+function audioFilename(contentType) {
+  const ct = String(contentType || '').toLowerCase();
+
+  if (ct.includes('mp4') || ct.includes('m4a') || ct.includes('aac')) {
+    return 'speech.mp4';
+  }
+
+  if (ct.includes('ogg') || ct.includes('oga')) {
+    return 'speech.ogg';
+  }
+
+  if (ct.includes('wav')) {
+    return 'speech.wav';
+  }
+
+  if (ct.includes('mpeg') || ct.includes('mp3') || ct.includes('mpga')) {
+    return 'speech.mp3';
+  }
+
+  return 'speech.webm';
+}
+
+// Primary STT: OpenAI-compatible Whisper. Prefers a real OpenAI key (and host)
+// when present, otherwise the AI tunnel. Forcing the language makes accented
+// German transcribe as German (Latin script) instead of, say, Cyrillic — which
+// the quest's answer parser would reject.
+async function transcribeWithWhisper(audio, contentType, language) {
+  let baseUrl;
+  let apiKey;
+
+  if (process.env.OPENAI_API_KEY) {
+    apiKey = process.env.OPENAI_API_KEY;
+    baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+  } else {
+    apiKey = process.env.AI_TUNNEL_API_KEY || process.env.AI_API_KEY || '';
+    baseUrl = process.env.AI_TUNNEL_BASE_URL || process.env.AI_BASE_URL || DEFAULT_AI_TUNNEL_BASE_URL;
+  }
 
   if (!apiKey) {
     return null;
   }
 
   const form = new FormData();
-  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), 'speech.webm');
-  form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
-
-  // Only pin the language when explicitly configured; Scribe auto-detects well
-  // and an unexpected code would 400 the whole request.
-  if (process.env.ELEVENLABS_STT_LANGUAGE) {
-    form.append('language_code', process.env.ELEVENLABS_STT_LANGUAGE);
-  }
-
-  const remoteResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
-    method: 'POST',
-    headers: { 'xi-api-key': apiKey },
-    body: form,
-  });
-
-  if (!remoteResponse.ok) {
-    throw new Error(`ElevenLabs STT ${remoteResponse.status}: ${await remoteResponse.text()}`);
-  }
-
-  const data = await remoteResponse.json();
-  return String(data.text || '').trim();
-}
-
-// Fallback: any OpenAI-compatible /audio/transcriptions endpoint (Whisper).
-async function transcribeWithWhisper(audio, contentType, language) {
-  const baseUrl =
-    process.env.AI_TUNNEL_BASE_URL ||
-    process.env.AI_BASE_URL ||
-    process.env.OPENAI_BASE_URL ||
-    DEFAULT_AI_TUNNEL_BASE_URL;
-  const apiKey =
-    process.env.AI_TUNNEL_API_KEY || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '';
-
-  if (!baseUrl || !apiKey) {
-    return null;
-  }
-
-  const form = new FormData();
-  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), 'speech.webm');
+  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), audioFilename(contentType));
   form.append('model', process.env.STT_MODEL || 'whisper-1');
 
   if (language) {
@@ -713,6 +711,39 @@ async function transcribeWithWhisper(audio, contentType, language) {
   return String(data.text || '').trim();
 }
 
+// Fallback STT: ElevenLabs Scribe (reuses the TTS key). Also pins the language
+// so it doesn't render accented German in another alphabet.
+async function transcribeWithElevenLabs(audio, contentType, language) {
+  const apiKey = process.env.ELEVENLABS_API_KEY || '';
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const form = new FormData();
+  form.append('file', new Blob([audio], { type: contentType || 'audio/webm' }), audioFilename(contentType));
+  form.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
+
+  const code = process.env.ELEVENLABS_STT_LANGUAGE || language;
+
+  if (code) {
+    form.append('language_code', code);
+  }
+
+  const remoteResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey },
+    body: form,
+  });
+
+  if (!remoteResponse.ok) {
+    throw new Error(`ElevenLabs STT ${remoteResponse.status}: ${await remoteResponse.text()}`);
+  }
+
+  const data = await remoteResponse.json();
+  return String(data.text || '').trim();
+}
+
 async function handleStt(request, response) {
   try {
     const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
@@ -725,33 +756,42 @@ async function handleStt(request, response) {
       return;
     }
 
+    // Whisper first (the requested engine), ElevenLabs Scribe as a fallback.
+    const providers = [
+      { name: 'whisper', run: transcribeWithWhisper },
+      { name: 'elevenlabs', run: transcribeWithElevenLabs },
+    ];
     const errors = [];
     let text = null;
+    let provider = null;
 
-    for (const transcribe of [transcribeWithElevenLabs, transcribeWithWhisper]) {
+    for (const candidate of providers) {
       try {
-        const result = await transcribe(audio, contentType, language);
+        const result = await candidate.run(audio, contentType, language);
 
         if (result !== null && result !== undefined) {
           text = result;
+          provider = candidate.name;
           break;
         }
       } catch (error) {
-        console.warn(error.message);
-        errors.push(error.message);
+        console.warn(`STT ${candidate.name} failed: ${error.message}`);
+        errors.push(`${candidate.name}: ${error.message}`);
       }
     }
 
     if (text === null) {
       sendJson(response, 503, {
         error:
-          'Распознавание речи не настроено на сервере (нужен ELEVENLABS_API_KEY или AI_TUNNEL_API_KEY).',
+          'Распознавание речи не настроено (нужен OPENAI_API_KEY или AI_TUNNEL_API_KEY для Whisper, либо ELEVENLABS_API_KEY).',
         detail: errors.join(' | ') || undefined,
       });
       return;
     }
 
-    sendJson(response, 200, { text });
+    // Logged so the transcript is visible in the server logs for debugging.
+    console.log(`STT(${provider}) "${text}"`);
+    sendJson(response, 200, { text, provider });
   } catch (error) {
     sendJson(response, 400, { error: error.message || 'STT failed' });
   }
