@@ -669,10 +669,24 @@ function audioFilename(contentType) {
   return 'speech.webm';
 }
 
-// Primary STT: OpenAI-compatible Whisper. Prefers a real OpenAI key (and host)
-// when present, otherwise the AI tunnel. Forcing the language makes accented
-// German transcribe as German (Latin script) instead of, say, Cyrillic — which
-// the quest's answer parser would reject.
+function isLikelySubtitleHallucination(text) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[\s.,:;!?'"()[\]{}<>_-]+/g, ' ')
+    .trim();
+
+  return (
+    normalized.includes('amara org') ||
+    normalized.includes('untertitel der amara') ||
+    normalized.includes('subtitles by the amara') ||
+    normalized.includes('captions by the amara') ||
+    normalized.includes('subtitle by the amara')
+  );
+}
+
+// Primary STT: OpenAI-compatible Whisper. Prefer a real OpenAI key and host
+// when present, otherwise use the AI tunnel. Pinning German keeps answers in
+// Latin script for the quest parser.
 async function transcribeWithWhisper(audio, contentType, language) {
   let baseUrl;
   let apiKey;
@@ -711,8 +725,7 @@ async function transcribeWithWhisper(audio, contentType, language) {
   return String(data.text || '').trim();
 }
 
-// Fallback STT: ElevenLabs Scribe (reuses the TTS key). Also pins the language
-// so it doesn't render accented German in another alphabet.
+// Fallback STT: ElevenLabs Scribe (reuses the TTS key).
 async function transcribeWithElevenLabs(audio, contentType, language) {
   const apiKey = process.env.ELEVENLABS_API_KEY || '';
 
@@ -756,12 +769,12 @@ async function handleStt(request, response) {
       return;
     }
 
-    // Whisper first (the requested engine), ElevenLabs Scribe as a fallback.
     const providers = [
       { name: 'whisper', run: transcribeWithWhisper },
       { name: 'elevenlabs', run: transcribeWithElevenLabs },
     ];
     const errors = [];
+    let hadProvider = false;
     let text = null;
     let provider = null;
 
@@ -769,11 +782,26 @@ async function handleStt(request, response) {
       try {
         const result = await candidate.run(audio, contentType, language);
 
-        if (result !== null && result !== undefined) {
-          text = result;
-          provider = candidate.name;
-          break;
+        if (result === null || result === undefined) {
+          continue;
         }
+
+        hadProvider = true;
+
+        if (!result) {
+          errors.push(`${candidate.name}: empty transcript`);
+          continue;
+        }
+
+        if (isLikelySubtitleHallucination(result)) {
+          console.warn(`STT ${candidate.name} ignored subtitle hallucination: ${result}`);
+          errors.push(`${candidate.name}: subtitle hallucination`);
+          continue;
+        }
+
+        text = result;
+        provider = candidate.name;
+        break;
       } catch (error) {
         console.warn(`STT ${candidate.name} failed: ${error.message}`);
         errors.push(`${candidate.name}: ${error.message}`);
@@ -781,15 +809,22 @@ async function handleStt(request, response) {
     }
 
     if (text === null) {
-      sendJson(response, 503, {
-        error:
-          'Распознавание речи не настроено (нужен OPENAI_API_KEY или AI_TUNNEL_API_KEY для Whisper, либо ELEVENLABS_API_KEY).',
-        detail: errors.join(' | ') || undefined,
-      });
+      if (hadProvider) {
+        sendJson(response, 422, {
+          error: 'Не расслышал речь. Проверьте выбранный микрофон и повторите фразу ближе к микрофону.',
+          detail: errors.join(' | ') || undefined,
+        });
+      } else {
+        sendJson(response, 503, {
+          error:
+            'Распознавание речи не настроено (нужен OPENAI_API_KEY или AI_TUNNEL_API_KEY для Whisper, либо ELEVENLABS_API_KEY).',
+          detail: errors.join(' | ') || undefined,
+        });
+      }
+
       return;
     }
 
-    // Logged so the transcript is visible in the server logs for debugging.
     console.log(`STT(${provider}) "${text}"`);
     sendJson(response, 200, { text, provider });
   } catch (error) {
