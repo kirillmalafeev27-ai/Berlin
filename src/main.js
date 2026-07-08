@@ -79,6 +79,19 @@ const GASTHAUS_INTERIOR_URL = '/Tavern%20noch%20eine.glb';
 // never shrink or offset the playable area (see normalizeGasthausModel).
 const GASTHAUS_FLOOR_SPAN = 10.8;
 const CHARACTER_MODEL_URL = '/Meshy_AI_Character_output.fbx';
+// Declared before the Gasthaus roster below references it (const has no
+// hoisting, so ordering matters for module-load-time evaluation).
+const ELEVENLABS_VOICES = {
+  rachel: '21m00Tcm4TlvDq8ikWAM',
+  domi: 'AZnzlk1XvdvUeBnXmlld',
+  bella: 'EXAVITQu4vr4xnSDxMaL',
+  antoni: 'ErXwobaYiN019PkySvjV',
+  elli: 'MF3mGyEYCl7XYWbV9V6O',
+  josh: 'TxGEqnHWrfWFTfGW9Xj',
+  arnold: 'VR6AewLTigWG4xSOukaG',
+  adam: 'pNInz6obpgDQGcFmaJgB',
+  sam: 'yoZ06aMxZJJ28mfd3POQ',
+};
 // Rigged, lip-synced characters used inside the Gasthaus (from the "characters"
 // collection). Falling back to a simple placeholder if a GLB fails to load.
 const GASTHAUS_CHARACTER_URLS = {
@@ -331,17 +344,6 @@ const NPC_SPAWN_OFFSETS = [
 const NPC_GROUND_SNAP_MAX_Y_DELTA = 0.9;
 const NPC_MIN_START_DISTANCE = 2.35;
 
-const ELEVENLABS_VOICES = {
-  rachel: '21m00Tcm4TlvDq8ikWAM',
-  domi: 'AZnzlk1XvdvUeBnXmlld',
-  bella: 'EXAVITQu4vr4xnSDxMaL',
-  antoni: 'ErXwobaYiN019PkySvjV',
-  elli: 'MF3mGyEYCl7XYWbV9V6O',
-  josh: 'TxGEqnHWrfWFTfGW9Xj',
-  arnold: 'VR6AewLTigWG4xSOukaG',
-  adam: 'pNInz6obpgDQGcFmaJgB',
-  sam: 'yoZ06aMxZJJ28mfd3POQ',
-};
 const NPC_VOICE_FALLBACKS = [
   ELEVENLABS_VOICES.josh,
   ELEVENLABS_VOICES.rachel,
