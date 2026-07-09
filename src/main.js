@@ -64,6 +64,17 @@ const counterCount = document.querySelector('#counter-count');
 const coinGame = document.querySelector('#coin-game');
 const coinResetButton = document.querySelector('#coin-reset');
 const coinPayButton = document.querySelector('#coin-pay');
+const npcToolOpenButton = document.querySelector('#npc-tool-open');
+const npcToolPanel = document.querySelector('#npc-tool-panel');
+const npcToolCloseButton = document.querySelector('#npc-tool-close');
+const npcToolSelect = document.querySelector('#npc-tool-select');
+const npcToolCoords = document.querySelector('#npc-tool-coords');
+const npcToolStepInput = document.querySelector('#npc-tool-step-input');
+const npcToolStepValue = document.querySelector('#npc-tool-step-value');
+const npcToolClickPlace = document.querySelector('#npc-tool-clickplace');
+const npcToolExportButton = document.querySelector('#npc-tool-export');
+const npcToolResetButton = document.querySelector('#npc-tool-reset');
+const npcToolOutput = document.querySelector('#npc-tool-output');
 
 if (dialogueInput) {
   dialogueInput.placeholder = 'Напишите или скажите 🎤 немецкую фразу';
@@ -73,6 +84,7 @@ const NAV_KIND_STORAGE_KEY = 'berlin-game.nav-kinds.v1';
 const CUSTOM_TARGET_STORAGE_KEY = 'berlin-game.custom-targets.v1';
 const DELETED_TARGET_STORAGE_KEY = 'berlin-game.deleted-targets.v1';
 const NAV_AREA_BLOCK_STORAGE_KEY = 'berlin-game.nav-area-blocks.v1';
+const NPC_OVERRIDE_STORAGE_KEY = 'berlin-game.npc-overrides.v1';
 const MAP_URL = '/fantasy-town.glb';
 const GASTHAUS_INTERIOR_URL = '/Tavern%20noch%20eine.glb';
 // The interior is fitted + centred on its ground-floor tiles so roof overhangs
@@ -543,6 +555,8 @@ let navKindOverrides = loadNavKindOverrides();
 let customTargets = loadCustomTargets();
 let deletedTargetIds = loadDeletedTargetIds();
 let navAreaBlocks = loadNavAreaBlocks();
+let npcPositionOverrides = loadNpcOverrides();
+let npcToolSelectedId = null;
 let lookYaw = 0;
 let lookPitch = -0.08;
 let pointerStart = null;
@@ -720,6 +734,227 @@ function hideSceneHint() {
   sceneHintTimer = window.setTimeout(() => {
     sceneHint.hidden = true;
   }, 340);
+}
+
+// --- NPC position overrides + in-game placement tool ---------------------
+// Positions tuned with the tool are stored per NPC id in localStorage and
+// applied when the NPC is (re)built, so they survive reloads until they get
+// baked into the source as defaults.
+
+function loadNpcOverrides() {
+  try {
+    const value = JSON.parse(localStorage.getItem(NPC_OVERRIDE_STORAGE_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveNpcOverrides() {
+  localStorage.setItem(NPC_OVERRIDE_STORAGE_KEY, JSON.stringify(npcPositionOverrides));
+}
+
+// Apply a stored override to a freshly-built NPC's root (before grounding).
+function applyNpcOverrideToRoot(id, root) {
+  const override = npcPositionOverrides[id];
+
+  if (!override) {
+    return;
+  }
+
+  if (override.position) {
+    root.position.set(override.position.x, override.position.y, override.position.z);
+  }
+
+  if (Number.isFinite(override.yaw)) {
+    root.rotation.y = override.yaw;
+  }
+}
+
+function recordNpcOverride(npc) {
+  if (!npc?.root) {
+    return;
+  }
+
+  npcPositionOverrides[npc.id] = {
+    position: {
+      x: Number(npc.root.position.x.toFixed(3)),
+      y: Number(npc.root.position.y.toFixed(3)),
+      z: Number(npc.root.position.z.toFixed(3)),
+    },
+    yaw: Number(npc.root.rotation.y.toFixed(4)),
+  };
+  saveNpcOverrides();
+}
+
+function regroundNpcAfterMove(npc) {
+  if (!npc) {
+    return;
+  }
+
+  if (npc.seated) {
+    groundSeatedNpc(npc);
+  } else if (!npc.mixer) {
+    // Placeholder capsules sit directly on the root.
+    npc.visual?.position.setY(0);
+  }
+  // Rigged standing NPCs re-ground themselves every frame via refitNpcToGround.
+}
+
+function npcToolCandidates() {
+  return npcs.filter((npc) => isNpcActiveForLocation(npc) && !isQuestGuard(npc));
+}
+
+function getNpcToolSelection() {
+  return npcToolCandidates().find((npc) => npc.id === npcToolSelectedId) || null;
+}
+
+function populateNpcToolSelect() {
+  if (!npcToolSelect) {
+    return;
+  }
+
+  const candidates = npcToolCandidates();
+  npcToolSelect.replaceChildren();
+
+  for (const npc of candidates) {
+    const option = document.createElement('option');
+    option.value = npc.id;
+    option.textContent = `${npc.label}${npc.seated ? ' (сидит)' : ''}`;
+    npcToolSelect.append(option);
+  }
+
+  if (!candidates.some((npc) => npc.id === npcToolSelectedId)) {
+    npcToolSelectedId = candidates[0]?.id || null;
+  }
+
+  if (npcToolSelectedId) {
+    npcToolSelect.value = npcToolSelectedId;
+  }
+
+  refreshNpcToolCoords();
+}
+
+function refreshNpcToolCoords() {
+  if (!npcToolCoords) {
+    return;
+  }
+
+  const npc = getNpcToolSelection();
+
+  if (!npc) {
+    npcToolCoords.textContent = 'Нет персонажей в этой локации';
+    return;
+  }
+
+  const p = npc.root.position;
+  const yawDeg = ((npc.root.rotation.y * 180) / Math.PI).toFixed(0);
+  npcToolCoords.textContent =
+    `${npc.id}\nx ${p.x.toFixed(2)}  y ${p.y.toFixed(2)}  z ${p.z.toFixed(2)}\nyaw ${yawDeg}°`;
+}
+
+function npcToolStep() {
+  return Number(npcToolStepInput?.value || 0.2);
+}
+
+function moveSelectedNpc(kind) {
+  const npc = getNpcToolSelection();
+
+  if (!npc) {
+    return;
+  }
+
+  const step = npcToolStep();
+
+  switch (kind) {
+    case 'x-': npc.root.position.x -= step; break;
+    case 'x+': npc.root.position.x += step; break;
+    case 'z-': npc.root.position.z -= step; break;
+    case 'z+': npc.root.position.z += step; break;
+    case 'y-': npc.root.position.y -= step; break;
+    case 'y+': npc.root.position.y += step; break;
+    case 'yaw-': npc.root.rotation.y -= Math.PI / 12; break;
+    case 'yaw+': npc.root.rotation.y += Math.PI / 12; break;
+    default: return;
+  }
+
+  regroundNpcAfterMove(npc);
+  syncNpcTarget(npc);
+  recordNpcOverride(npc);
+  refreshNpcToolCoords();
+  renderTargets();
+}
+
+function placeSelectedNpcAt(point) {
+  const npc = getNpcToolSelection();
+
+  if (!npc || !point) {
+    return false;
+  }
+
+  // Only move in the horizontal plane; the click might land on a table, so
+  // keep the current height and let the Y± buttons fine-tune it.
+  npc.root.position.x = point.x;
+  npc.root.position.z = point.z;
+
+  regroundNpcAfterMove(npc);
+  syncNpcTarget(npc);
+  recordNpcOverride(npc);
+  refreshNpcToolCoords();
+  renderTargets();
+  return true;
+}
+
+function isNpcToolOpen() {
+  return Boolean(npcToolPanel && !npcToolPanel.hidden);
+}
+
+function isNpcToolPlacing() {
+  return Boolean(npcToolClickPlace?.checked && isNpcToolOpen() && getNpcToolSelection());
+}
+
+function exportNpcPositions() {
+  const rows = npcToolCandidates().map((npc) => ({
+    id: npc.id,
+    position: {
+      x: Number(npc.root.position.x.toFixed(3)),
+      y: Number(npc.root.position.y.toFixed(3)),
+      z: Number(npc.root.position.z.toFixed(3)),
+    },
+    yaw: Number(npc.root.rotation.y.toFixed(4)),
+    location: npc.location || LOCATION_VILLAGE,
+  }));
+
+  const json = JSON.stringify(rows, null, 2);
+
+  if (npcToolOutput) {
+    npcToolOutput.hidden = false;
+    npcToolOutput.value = json;
+    npcToolOutput.focus();
+    npcToolOutput.select();
+  }
+
+  navigator.clipboard?.writeText(json).then(
+    () => setStatus('Позиции скопированы в буфер обмена', 'ready'),
+    () => setStatus('Позиции в поле ниже — скопируйте вручную', 'ready'),
+  );
+}
+
+function resetSelectedNpcOverride() {
+  const npc = getNpcToolSelection();
+
+  if (!npc) {
+    return;
+  }
+
+  delete npcPositionOverrides[npc.id];
+  saveNpcOverrides();
+  setStatus(`Сброшено: ${npc.label}. Перезагрузите страницу, чтобы вернуть дефолт.`, 'ready');
+}
+
+function openNpcTool() {
+  populateNpcToolSelect();
+  setFeaturePanel(npcToolPanel, true);
 }
 
 function isGameAudioUnlocked() {
@@ -2074,6 +2309,7 @@ function buildGasthausNpc(definition, rigged) {
   root.name = definition.id;
   root.position.copy(definition.position);
   root.rotation.y = definition.yaw || 0;
+  applyNpcOverrideToRoot(definition.id, root);
 
   let visual;
   let mixer = null;
@@ -2246,6 +2482,7 @@ function createQuestThreeNpc(definition) {
   root.name = definition.id;
   root.position.copy(snapToNpcGround(definition.position));
   root.rotation.y = definition.yaw || angleToAgent(root.position);
+  applyNpcOverrideToRoot(definition.id, root);
 
   const visual = createGasthausNpcVisual(definition.color || 0x72859b);
   root.add(visual);
@@ -2555,6 +2792,15 @@ function handleGasthausCanvasClick(event) {
 
   updatePointer(event);
   raycaster.setFromCamera(pointer, camera);
+
+  // Placement tool: click the floor to drop the selected character there.
+  if (isNpcToolPlacing()) {
+    const floorHits = raycaster.intersectObject(gasthausRoot, true);
+
+    if (floorHits.length && placeSelectedNpcAt(floorHits[0].point.clone())) {
+      return;
+    }
+  }
 
   const npcHits = raycaster.intersectObjects(
     npcs.filter((npc) => isGasthausNpc(npc)).map((npc) => npc.root),
@@ -4107,8 +4353,9 @@ function updateNpcMovement(npc, deltaTime) {
 
   if (npc.state === 'talking') {
     // Seated guests keep their fixed orientation; turning a sitting body to
-    // track the player looks like sliding.
-    if (!npc.seated) {
+    // track the player looks like sliding. Also freeze facing while the
+    // placement tool is open so the yaw you set actually holds.
+    if (!npc.seated && !isNpcToolOpen()) {
       faceNpcToAgent(npc, Math.min(deltaTime * 8, 1));
     }
 
@@ -4122,6 +4369,7 @@ function updateNpcMovement(npc, deltaTime) {
 
     if (
       !npc.seated &&
+      !isNpcToolOpen() &&
       npc.root.position.distanceToSquared(agent.position) <= QUEST_TRIGGER_ALERT * QUEST_TRIGGER_ALERT
     ) {
       faceNpcToAgent(npc, Math.min(deltaTime * 4, 1));
@@ -6466,6 +6714,15 @@ function handleCanvasClick(event) {
   updatePointer(event);
   raycaster.setFromCamera(pointer, camera);
 
+  // Placement tool: click the ground to drop the selected character there.
+  if (isNpcToolPlacing()) {
+    const floorHits = raycaster.intersectObject(cityRoot, true);
+
+    if (floorHits.length && placeSelectedNpcAt(floorHits[0].point.clone())) {
+      return;
+    }
+  }
+
   if (isCutMode) {
     const hits = raycaster.intersectObject(cityRoot, true);
 
@@ -6573,6 +6830,24 @@ function setupInputEvents() {
   coinResetButton?.addEventListener('click', resetGasthausCoins);
   coinPayButton?.addEventListener('click', submitGasthausPayment);
 
+  npcToolOpenButton?.addEventListener('click', openNpcTool);
+  npcToolCloseButton?.addEventListener('click', () => setFeaturePanel(npcToolPanel, false));
+  npcToolSelect?.addEventListener('change', () => {
+    npcToolSelectedId = npcToolSelect.value;
+    refreshNpcToolCoords();
+  });
+  npcToolStepInput?.addEventListener('input', () => {
+    if (npcToolStepValue) {
+      npcToolStepValue.value = Number(npcToolStepInput.value).toFixed(2);
+    }
+  });
+  npcToolExportButton?.addEventListener('click', exportNpcPositions);
+  npcToolResetButton?.addEventListener('click', resetSelectedNpcOverride);
+
+  for (const button of npcToolPanel?.querySelectorAll('[data-npc-move]') || []) {
+    button.addEventListener('click', () => moveSelectedNpc(button.dataset.npcMove));
+  }
+
   rebuildNavmeshButton.addEventListener('click', rebuildNavigation);
 
   pickTargetButton.addEventListener('click', () => {
@@ -6627,6 +6902,7 @@ function setupInputEvents() {
     if (event.code === 'Escape') {
       setFeaturePanel(walletPanel, false);
       setFeaturePanel(dorfbuchPanel, false);
+      setFeaturePanel(npcToolPanel, false);
 
       if (isPickMode) {
         setPickMode(false);
