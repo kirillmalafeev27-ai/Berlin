@@ -119,6 +119,8 @@ const bodyAnimationFiles = new Set([
   'Sad Idle.glb',
   'Shaking Head No.glb',
   'Shrugging.glb',
+  'Sitting Idle.glb',
+  'Sitting Laughing.glb',
   'Standing Arguing.glb',
   'Standing Greeting.glb',
   'Standing Idle.glb',
