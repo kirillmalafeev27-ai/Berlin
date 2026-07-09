@@ -2598,8 +2598,10 @@ function updateLocationTriggers() {
     return;
   }
 
-  // Require the player to be right at the door before entering (was 2.3).
-  if (agent.position.distanceToSquared(GASTHAUS_DOOR_POINT) <= 1.4 * 1.4) {
+  // Trigger when the player walks up to the Gasthaus building. 1.4 was too
+  // tight to ever reach (walls/navmesh stop the player short), so entry never
+  // fired; 2.3 is the reliable "at the door" distance.
+  if (agent.position.distanceToSquared(GASTHAUS_DOOR_POINT) <= 2.3 * 2.3) {
     enterGasthaus();
   }
 }
