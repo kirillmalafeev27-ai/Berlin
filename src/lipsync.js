@@ -4,7 +4,7 @@ const OPEN_CHARS = new Set('aeiouy');
 const CYRILLIC_CLOSED = new Set(['\u043c', '\u0431', '\u043f']);
 const CYRILLIC_ROUND = new Set(['\u043e', '\u0443', '\u044e']);
 const CYRILLIC_OPEN = new Set(['\u0430', '\u044d', '\u0435', '\u0451', '\u0438', '\u044b', '\u044f']);
-const A1_SPEECH_RATE = 0.74;
+const DEFAULT_SPEECH_RATE = 1;
 
 function normalizeMorphName(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -90,10 +90,10 @@ function normalizeSpeechRate(rate) {
   const value = Number(rate);
 
   if (!Number.isFinite(value)) {
-    return A1_SPEECH_RATE;
+    return DEFAULT_SPEECH_RATE;
   }
 
-  return Math.min(1, Math.max(0.55, value));
+  return Math.min(1.2, Math.max(0.7, value));
 }
 
 function stretchTrack(track, factor) {
@@ -293,6 +293,7 @@ export class TextLipSync {
         body: JSON.stringify({
           text,
           voice_id: options.voiceId,
+          speed: options.speed ?? options.rate,
         }),
       });
 
@@ -316,19 +317,19 @@ export class TextLipSync {
     const blobUrl = URL.createObjectURL(new Blob([audioBuffer], { type: mime }));
     const audio = new Audio(blobUrl);
     const track = makeAlignmentTrack(alignment, text) || makeTextTrack(text, estimateDuration(text));
-    const speechRate = normalizeSpeechRate(options.rate ?? options.playbackRate);
-    const timeScale = 1 / speechRate;
-    const slowedTrack = stretchTrack(track, timeScale);
-    const duration = (alignmentDuration(slowedTrack) || estimateDuration(text) * timeScale);
+    const playbackRate = normalizeSpeechRate(options.playbackRate);
+    const timeScale = 1 / playbackRate;
+    const playbackTrack = stretchTrack(track, timeScale);
+    const duration = alignmentDuration(playbackTrack) || estimateDuration(text) * timeScale;
 
     audio.preload = 'auto';
-    audio.playbackRate = speechRate;
+    audio.playbackRate = playbackRate;
     audio.volume = options.volume ?? 0.82;
     audio.muted = false;
     audio.playsInline = true;
     this.connectAudioElement(audio);
     this.audio = audio;
-    this.track = slowedTrack;
+    this.track = playbackTrack;
     this.duration = duration;
     this.active = true;
     this.startedAt = performance.now() / 1000;
@@ -356,7 +357,7 @@ export class TextLipSync {
   }
 
   speakFromText(text) {
-    const duration = estimateDuration(text) / A1_SPEECH_RATE;
+    const duration = estimateDuration(text) / DEFAULT_SPEECH_RATE;
     this.track = makeTextTrack(text, duration);
     this.duration = duration;
     this.startedAt = performance.now() / 1000;
@@ -365,7 +366,7 @@ export class TextLipSync {
   }
 
   speakFromBrowserVoice(text, options = {}) {
-    const speechRate = normalizeSpeechRate(options.rate);
+    const speechRate = normalizeSpeechRate(options.rate ?? options.speed);
     const duration = estimateDuration(text) / speechRate;
     this.track = makeTextTrack(text, duration);
     this.duration = duration;

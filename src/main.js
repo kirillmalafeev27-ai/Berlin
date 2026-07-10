@@ -104,8 +104,6 @@ const ELEVENLABS_VOICES = {
   arnold: 'VR6AewLTigWG4xSOukaG',
   adam: 'pNInz6obpgDQGcFmaJgB',
   sam: 'yoZ06aMxZJJ28mfd3POQ',
-  // ElevenLabs multilingual narrator for Russian teaching overlays.
-  russianNarrator: 'EXAVITQu4vr4xnSDxMaL',
   // Warm European female, reads German cleanly with eleven_multilingual_v2 -
   // used for the innkeeper at the bar.
   charlotte: 'XB0fDUnXU5powFXDhCwa',
@@ -113,17 +111,17 @@ const ELEVENLABS_VOICES = {
 // Rigged, lip-synced character GLBs. NPCs must use these real models from the
 // characters collection; do not replace a failed model with procedural shapes.
 const GASTHAUS_CHARACTER_URLS = {
-  grandmother: '/Mixamo/characters/Idle_Grandmother_Y_UP_baked.rigged%20(2).glb',
-  berliner: '/Mixamo/characters/Idle%20berliner%20man_YUP_baked.rigged.glb',
-  chef: '/Mixamo/characters/Idle%20Meshy_AI_The_Welcoming_Chef_0705154142_texture_YUP_baked.rigged.glb',
-  oliveCoat: '/Mixamo/characters/idle%20olive%20coat_YUP_baked.rigged.glb',
-  hijabiProfessional: '/Mixamo/characters/idle%20on%20Meshy_AI_Hijabi_Professional_0705154041_texture_YUP_baked.rigged.glb',
+  grandmother: '/assets/mixamo/characters/Idle_Grandmother_Y_UP_baked.rigged%20(2).glb',
+  berliner: '/assets/mixamo/characters/Idle%20berliner%20man_YUP_baked.rigged.glb',
+  chef: '/assets/mixamo/characters/Idle%20Meshy_AI_The_Welcoming_Chef_0705154142_texture_YUP_baked.rigged.glb',
+  oliveCoat: '/assets/mixamo/characters/idle%20olive%20coat_YUP_baked.rigged.glb',
+  hijabiProfessional: '/assets/mixamo/characters/idle%20on%20Meshy_AI_Hijabi_Professional_0705154041_texture_YUP_baked.rigged.glb',
 };
 // Seated NPCs loop this Mixamo body clip; it retargets onto the shared
 // mixamorig skeleton the characters use.
 const GASTHAUS_SITTING_CLIP_URLS = [
-  '/Mixamo/glb/Sitting%20Laughing.glb',
-  '/Mixamo/glb/Sitting%20Idle.glb',
+  '/assets/mixamo/glb/Sitting%20Laughing.glb',
+  '/assets/mixamo/glb/Sitting%20Idle.glb',
 ];
 const EMPTY_TEXTURE_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lb9ZfwAAAABJRU5ErkJggg==';
@@ -162,10 +160,10 @@ const LOCATION_GASTHAUS = 'gasthaus';
 const LOCATION_BAKERY = 'bakery';
 const GASTHAUS_ENTRY_TARGET_ID = 'gasthaus_gruenbach';
 const BAKERY_ENTRY_TARGET_ID = 'baeckerei_gruenbach';
-const GASTHAUS_DOOR_POINT = new THREE.Vector3(72.0, 4.82, 57.0);
-const GASTHAUS_APPROACH_POINT = new THREE.Vector3(71.35, 4.82, 57.65);
-const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
-const GASTHAUS_ENTRY_RADIUS = 1.15;
+const GASTHAUS_DOOR_POINT = new THREE.Vector3(82.19, 5.02, 40.58);
+const GASTHAUS_APPROACH_POINT = new THREE.Vector3(82.19, 5.02, 40.58);
+const GASTHAUS_RETURN_POINT = new THREE.Vector3(80.28, 5.02, 41.82);
+const GASTHAUS_ENTRY_RADIUS = 1.35;
 const BAKERY_DOOR_POINT = new THREE.Vector3(66.4, 4.82, 58.0);
 const BAKERY_APPROACH_POINT = new THREE.Vector3(67.1, 4.82, 58.7);
 const BAKERY_RETURN_POINT = new THREE.Vector3(67.4, 4.82, 59.6);
@@ -204,7 +202,7 @@ const GASTHAUS_NPCS = [
     aliases: ['berta', 'frau berta', 'wirtin', 'innkeeper', 'хозяйка'],
     // Default placement saved from the in-game Gasthaus layout.
     modelUrl: GASTHAUS_CHARACTER_URLS.grandmother,
-    position: new THREE.Vector3(-0.806, -0.9, -2.72),
+    position: new THREE.Vector3(-1.81, -0.9, 2.53),
     yaw: 1.2209,
     voiceId: ELEVENLABS_VOICES.charlotte,
     color: 0x7d3f98,
@@ -216,7 +214,7 @@ const GASTHAUS_NPCS = [
     aliases: ['jörg', 'joerg', 'gast', 'guest', 'постоялец'],
     // Default placement saved from the in-game Gasthaus layout.
     modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
-    position: new THREE.Vector3(0.048, -0.7, -5.172),
+    position: new THREE.Vector3(3.86, -1.0, -1.567),
     yaw: -0.2618,
     seated: true,
     voiceId: ELEVENLABS_VOICES.josh,
@@ -230,13 +228,14 @@ const GASTHAUS_NPCS = [
     aliases: ['hans', 'baecker', 'bäcker', 'baker', 'пекарь'],
     modelUrl: GASTHAUS_CHARACTER_URLS.chef,
     // Default placement saved from the in-game Gasthaus layout.
-    position: new THREE.Vector3(8.29, -0.7, 1.4),
+    position: new THREE.Vector3(3.907, -1.0, 2.744),
     yaw: 2.8798,
     seated: true,
     voiceId: ELEVENLABS_VOICES.antoni,
     color: 0xc57b2d,
   },
 ];
+const SOURCE_LOCKED_NPC_IDS = new Set(GASTHAUS_NPCS.map((npc) => npc.id));
 const GASTHAUS_DOOR_TARGETS = [
   { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.2, 0, -3.6) },
   { id: 'room_zwei', label: 'Tür zwei', word: 'zwei', position: new THREE.Vector3(-1.8, 0, -3.6) },
@@ -417,11 +416,11 @@ const GERMAN_NUMBERS = [
   'neunzehn',
   'zwanzig',
 ];
-const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
+const QUEST_GUARD_IDLE_URL = '/assets/mixamo/glb/Idle%20Default%20beliner.glb';
 // Used only when the asset manifest reports no rigged characters. This is still
-// a real GLB from /Mixamo/characters, never a generated stand-in.
+// a real GLB from /assets/mixamo/characters, never a generated stand-in.
 const QUEST_GUARD_MODEL_DEFAULT_URL =
-  '/Mixamo/characters/Idle%20Meshy_AI_Police_Officer_in_T_P_0705154259_texture_YUP_baked.rigged.glb';
+  '/assets/mixamo/characters/Idle%20Meshy_AI_Police_Officer_in_T_P_0705154259_texture_YUP_baked.rigged.glb';
 const QUEST_WALKABLE_RECTS = [
   { name: 'Quest_Walkable_Gate_Approach', x: 58.8, y: 4.82, z: 132.0, sx: 9, sz: 28 },
   { name: 'Quest_Walkable_Main_Street', x: 58.8, y: 4.82, z: 91.0, sx: 9, sz: 62 },
@@ -773,7 +772,6 @@ const bakeryQuestState = {
     bread: false,
   },
 };
-const spokenRussianLessonKeys = new Set();
 const RUSSIAN_LESSON_EXPLANATIONS = {
   guardGreeting:
     'Сейчас тренируем приветствие и ответ на вопрос кто ты. Слушай немецкую фразу, потом назови себя: Ich bin плюс имя.',
@@ -816,6 +814,115 @@ const RUSSIAN_LESSON_EXPLANATIONS = {
   bakeryFinal:
     'Финал без подсказок: сам собери три модальные фразы в правильном порядке: мука, тесто, хлеб.',
 };
+
+function getCurrentRussianLessonKey(npc = selectedNpc) {
+  if (isQuestGuard(npc)) {
+    return questState.stage === 'ask_origin' ? 'guardOrigin' : 'guardGreeting';
+  }
+
+  if (isGasthausNpc(npc)) {
+    if (gasthausQuest.completed && questThreeState.unlocked && !questThreeState.completed) {
+      return 'questThreeIntro';
+    }
+
+    if (gasthausQuest.stage === 'greeting' || gasthausQuest.stage === 'idle') {
+      return 'gasthausIntro';
+    }
+
+    if (gasthausQuest.stage === 'ask_room') {
+      return 'gasthausRoom';
+    }
+
+    if (gasthausQuest.stage === 'negotiate_price') {
+      return 'gasthausPrice';
+    }
+
+    if (gasthausQuest.stage === 'count_money') {
+      return 'gasthausMoney';
+    }
+
+    if (gasthausQuest.stage === 'get_key') {
+      return 'gasthausKey';
+    }
+  }
+
+  if (isQuestThreeNpc(npc)) {
+    return npc.id === 'muellerin_greta' && !questThreeState.gretaGreeted
+      ? 'questThreeGretaGreeting'
+      : 'questThreeIntro';
+  }
+
+  if (isMarketHans(npc)) {
+    return 'marketIntro';
+  }
+
+  if (npc?.id === 'kaesehaendler_otto') {
+    return 'marketAccusative';
+  }
+
+  if (npc?.id === 'eierfrau_lena') {
+    return 'marketCount';
+  }
+
+  if (npc?.id === 'gemuesehaendlerin_rosa') {
+    return 'marketColor';
+  }
+
+  if (isBakeryHans(npc)) {
+    if (!bakeryQuestState.started || bakeryQuestState.stage === 'offer') {
+      return 'bakeryIntro';
+    }
+
+    if (bakeryQuestState.stage === 'wash_phrase' || bakeryQuestState.stage === 'wash_action') {
+      return 'bakeryWash';
+    }
+
+    if (bakeryQuestState.stage === 'flour_phrase' || bakeryQuestState.stage === 'flour_action') {
+      return 'bakeryFlour';
+    }
+
+    if (bakeryQuestState.stage === 'water_phrase' || bakeryQuestState.stage === 'water_action') {
+      return 'bakeryWater';
+    }
+
+    if (bakeryQuestState.stage === 'permission') {
+      return 'bakeryPermission';
+    }
+
+    if (bakeryQuestState.stage === 'dough_phrase' || bakeryQuestState.stage === 'dough_action') {
+      return 'bakeryDough';
+    }
+
+    if (['free_sequence', 'order_flour_action', 'order_dough_phrase', 'order_dough_action', 'bake_phrase', 'bake_action'].includes(bakeryQuestState.stage)) {
+      return 'bakeryFinal';
+    }
+  }
+
+  return '';
+}
+
+function getCurrentRussianLessonText(npc = selectedNpc) {
+  return RUSSIAN_LESSON_EXPLANATIONS[getCurrentRussianLessonKey(npc)] || '';
+}
+
+function appendRussianHelpChip(chips = []) {
+  if (!getCurrentRussianLessonText() || chips.some((chip) => chip.action === 'russian-help')) {
+    return chips;
+  }
+
+  return [...chips, { label: 'Русская подсказка', action: 'russian-help' }];
+}
+
+function showRussianQuestHint(npc = selectedNpc) {
+  const text = getCurrentRussianLessonText(npc);
+
+  if (!text) {
+    showSceneHint('Русской подсказки для этого шага пока нет.', 5000);
+    return;
+  }
+
+  showSceneHint(text, 12000);
+}
 let gasthausRoot = null;
 let gasthausModel = null;
 let gasthausInteractables = new Map();
@@ -936,7 +1043,25 @@ function hideSceneHint() {
 function loadNpcOverrides() {
   try {
     const value = JSON.parse(localStorage.getItem(NPC_OVERRIDE_STORAGE_KEY) || '{}');
-    return value && typeof value === 'object' ? value : {};
+
+    if (!value || typeof value !== 'object') {
+      return {};
+    }
+
+    let changed = false;
+
+    for (const id of SOURCE_LOCKED_NPC_IDS) {
+      if (id in value) {
+        delete value[id];
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      localStorage.setItem(NPC_OVERRIDE_STORAGE_KEY, JSON.stringify(value));
+    }
+
+    return value;
   } catch (error) {
     return {};
   }
@@ -948,6 +1073,10 @@ function saveNpcOverrides() {
 
 // Apply a stored override to a freshly-built NPC's root (before grounding).
 function applyNpcOverrideToRoot(id, root) {
+  if (SOURCE_LOCKED_NPC_IDS.has(id)) {
+    return;
+  }
+
   const override = npcPositionOverrides[id];
 
   if (!override) {
@@ -972,6 +1101,10 @@ function applyNpcOverrideToRoot(id, root) {
 }
 
 function hasNpcPlacementOverride(id) {
+  if (SOURCE_LOCKED_NPC_IDS.has(id)) {
+    return false;
+  }
+
   const override = npcPositionOverrides[id];
   return Boolean(override?.position || Number.isFinite(Number(override?.yaw)) || override?.locked);
 }
@@ -1009,6 +1142,14 @@ function applyNpcOverrideToNpc(npc) {
 
 function recordNpcOverride(npc) {
   if (!npc?.root) {
+    return;
+  }
+
+  if (SOURCE_LOCKED_NPC_IDS.has(npc.id)) {
+    if (npc.id in npcPositionOverrides) {
+      delete npcPositionOverrides[npc.id];
+      saveNpcOverrides();
+    }
     return;
   }
 
@@ -1100,6 +1241,11 @@ function moveSelectedNpc(kind) {
     return;
   }
 
+  if (SOURCE_LOCKED_NPC_IDS.has(npc.id)) {
+    setStatus(`${npc.label}: позиция зафиксирована в коде`, 'ready');
+    return;
+  }
+
   const step = npcToolStep();
 
   switch (kind) {
@@ -1126,6 +1272,11 @@ function placeSelectedNpcAt(point) {
   const npc = getNpcToolSelection();
 
   if (!npc || !point) {
+    return false;
+  }
+
+  if (SOURCE_LOCKED_NPC_IDS.has(npc.id)) {
+    setStatus(`${npc.label}: позиция зафиксирована в коде`, 'ready');
     return false;
   }
 
@@ -1806,14 +1957,6 @@ async function gasthausSpeak(npc, de, ru = '', options = {}) {
   return speakQuestLine(npc, de, ru, {
     intent: options.intent || 'talk',
     append: options.append,
-    lesson: options.lesson,
-    ruIntro: options.ruIntro,
-    skipRuIntro: options.skipRuIntro,
-    forceRuIntro: options.forceRuIntro,
-    ruVoiceId: options.ruVoiceId,
-    ruRate: options.ruRate,
-    ruPitch: options.ruPitch,
-    ruVolume: options.ruVolume,
   });
 }
 
@@ -1925,7 +2068,7 @@ async function submitGasthausPayment() {
       berta,
       'Zwölf! Perfekt! Hier - der Schlüssel! Zimmer drei. Oben.',
       'Двенадцать! Отлично! Вот ключ. Комната три. Наверху.',
-      { intent: 'happy', lesson: 'gasthausKey' },
+      { intent: 'happy' },
     );
     return;
   }
@@ -1996,7 +2139,7 @@ async function handleGasthausRoom(word) {
     berta,
     'Guten Morgen! Hier - dein Dorfbuch. Geh raus, sprich mit den Leuten!',
     'Доброе утро! Вот твоя деревенская книга. Выйди и поговори с людьми!',
-    { intent: 'happy', lesson: 'questThreeIntro' },
+    { intent: 'happy' },
   );
 }
 
@@ -2051,7 +2194,7 @@ async function openGasthausQuestDialogue() {
       berta,
       'Geh raus, sprich mit Hans, Greta und Ida. Frag: Wer? Was? Wo?',
       'Выйди и поговори с Hans, Greta и Ida. Спроси: Wer? Was? Wo?',
-      { intent: 'helpful', lesson: 'questThreeIntro' },
+      { intent: 'helpful' },
     );
     return;
   }
@@ -2076,7 +2219,7 @@ async function openGasthausQuestDialogue() {
       berta,
       `So, ${questState.playerName || 'Gast'}. Was brauchst du?`,
       `Так, ${questState.playerName || 'гость'}. Что тебе нужно?`,
-      { intent: 'thinking', lesson: 'gasthausRoom' },
+      { intent: 'thinking' },
     );
     return;
   }
@@ -2085,7 +2228,6 @@ async function openGasthausQuestDialogue() {
     gasthausSetStatus('спросите цену');
     await gasthausSpeak(berta, 'Klein, aber gut. Was möchtest du wissen?', 'Маленькая, но хорошая. Что хочешь узнать?', {
       intent: 'thinking',
-      lesson: 'gasthausPrice',
     });
     return;
   }
@@ -2095,14 +2237,13 @@ async function openGasthausQuestDialogue() {
     openWalletPanel();
     await gasthausSpeak(berta, 'Eine Nacht - zwölf Münzen.', 'Одна ночь - двенадцать монет.', {
       intent: 'counting',
-      lesson: 'gasthausMoney',
     });
     return;
   }
 
   if (gasthausQuest.stage === 'get_key') {
     gasthausSetStatus('найдите Zimmer drei');
-    await gasthausSpeak(berta, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful', lesson: 'gasthausKey' });
+    await gasthausSpeak(berta, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful' });
     return;
   }
 
@@ -2111,7 +2252,7 @@ async function openGasthausQuestDialogue() {
     berta,
     'Oh, ein Gast! Guten Tag! Ich bin Berta. Und du bist...?',
     'О, гость! Добрый день! Я Берта. А ты...?',
-    { intent: 'greeting', lesson: 'gasthausIntro' },
+    { intent: 'greeting' },
   );
 }
 
@@ -2176,7 +2317,6 @@ async function sendGasthausDialogueToNpc(npc, message) {
     renderGasthausChips();
     await gasthausSpeak(bertaOrNpc(npc), `So, ${parsed.value}. Was brauchst du?`, `Так, ${parsed.value}. Что тебе нужно?`, {
       intent: 'thinking',
-      lesson: 'gasthausRoom',
     });
     return;
   }
@@ -2194,7 +2334,7 @@ async function sendGasthausDialogueToNpc(npc, message) {
       npc,
       'Ein Zimmer? Ja! Ich habe ein Zimmer. Klein, aber gut!',
       'Комната? Да! У меня есть комната. Маленькая, но хорошая!',
-      { intent: 'happy', lesson: 'gasthausPrice' },
+      { intent: 'happy' },
     );
     return;
   }
@@ -2211,7 +2351,6 @@ async function sendGasthausDialogueToNpc(npc, message) {
     openWalletPanel();
     await gasthausSpeak(npc, 'Eine Nacht - zwölf Münzen.', 'Одна ночь - двенадцать монет.', {
       intent: 'counting',
-      lesson: 'gasthausMoney',
     });
     return;
   }
@@ -2238,7 +2377,7 @@ async function sendGasthausDialogueToNpc(npc, message) {
       return;
     }
 
-    await gasthausSpeak(npc, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful', lesson: 'gasthausKey' });
+    await gasthausSpeak(npc, 'Zimmer drei. Oben.', 'Комната три. Наверху.', { intent: 'helpful' });
     return;
   }
 
@@ -2465,14 +2604,6 @@ async function marketSpeak(npc, de, ru = '', options = {}) {
   return speakQuestLine(npc, de, ru, {
     intent: options.intent || 'talk',
     append: options.append,
-    lesson: options.lesson,
-    ruIntro: options.ruIntro,
-    skipRuIntro: options.skipRuIntro,
-    forceRuIntro: options.forceRuIntro,
-    ruVoiceId: options.ruVoiceId,
-    ruRate: options.ruRate,
-    ruPitch: options.ruPitch,
-    ruVolume: options.ruVolume,
   });
 }
 
@@ -2623,7 +2754,7 @@ async function openMarketHansDialogue(npc) {
       npc,
       `Geh bitte zum Markt. ${getMarketListText()} Otto hat Kaese, Lena hat Eier und Milch, Rosa hat Gemuese.`,
       'Buy the shopping list in the village market.',
-      { append: false, intent: 'helpful', lesson: 'marketIntro' },
+      { append: false, intent: 'helpful' },
     );
     return;
   }
@@ -2765,14 +2896,6 @@ async function bakerySpeak(npc, de, ru = '', options = {}) {
   return speakQuestLine(targetNpc, de, ru, {
     intent: options.intent || 'talk',
     append: options.append,
-    lesson: options.lesson,
-    ruIntro: options.ruIntro,
-    skipRuIntro: options.skipRuIntro,
-    forceRuIntro: options.forceRuIntro,
-    ruVoiceId: options.ruVoiceId,
-    ruRate: options.ruRate,
-    ruPitch: options.ruPitch,
-    ruVolume: options.ruVolume,
   });
 }
 
@@ -2820,7 +2943,6 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   if (stage === 'wash_phrase') {
     await bakerySpeak(npc, 'Sag: Ich muss die Haende waschen.', 'Скажи: Ich muss die Hände waschen.', {
       intent: 'helpful',
-      lesson: 'bakeryWash',
     });
     return;
   }
@@ -2828,7 +2950,6 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   if (stage === 'flour_phrase') {
     await bakerySpeak(npc, 'Sag: Ich kann das Mehl holen. Verb am Ende.', 'Скажи: Ich kann das Mehl holen.', {
       intent: 'helpful',
-      lesson: 'bakeryFlour',
     });
     return;
   }
@@ -2836,7 +2957,6 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   if (stage === 'permission') {
     await bakerySpeak(npc, 'Frag zuerst: Darf ich? Dann darfst du den Teig kneten.', 'Сначала спроси разрешение.', {
       intent: 'helpful',
-      lesson: 'bakeryPermission',
     });
     return;
   }
@@ -2844,7 +2964,6 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   if (stage === 'water_phrase') {
     await bakerySpeak(npc, 'Sag: Ich muss das Wasser bringen. Verb am Ende.', 'Скажи: Ich muss das Wasser bringen.', {
       intent: 'helpful',
-      lesson: 'bakeryWater',
     });
     return;
   }
@@ -2852,7 +2971,6 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   if (stage === 'dough_phrase') {
     await bakerySpeak(npc, 'Sag: Ich muss den Teig kneten. Verb am Ende.', 'Скажи: Ich muss den Teig kneten.', {
       intent: 'helpful',
-      lesson: 'bakeryDough',
     });
     return;
   }
@@ -2862,7 +2980,7 @@ async function showBakeryHelp(npc = getBakeryHans()) {
       npc,
       'Ohne Chips: Ich muss das Mehl holen. Ich muss den Teig kneten. Ich will Brot backen.',
       'Финальная последовательность без chips.',
-      { intent: 'helpful', lesson: 'bakeryFinal' },
+      { intent: 'helpful' },
     );
     return;
   }
@@ -2883,7 +3001,7 @@ async function startBakeryQuest(npc) {
     npc,
     'Zuerst - die Haende waschen! Was musst du machen?',
     'Сначала вымыть руки. Ответь модальной рамкой.',
-    { intent: 'helpful', lesson: 'bakeryWash' },
+    { intent: 'helpful' },
   );
 }
 
@@ -2907,7 +3025,6 @@ async function openBakeryDialogue(npc = getBakeryHans()) {
     await bakerySpeak(npc, 'Willst du helfen? Ich zeige dir alles!', 'Хочешь помочь? Я всё покажу.', {
       append: false,
       intent: 'greeting',
-      lesson: 'bakeryIntro',
     });
     return;
   }
@@ -3020,7 +3137,6 @@ async function sendBakeryDialogueToNpc(npc, message) {
       renderDorfbuch();
     await bakerySpeak(npc, 'Ja, klar! Jetzt: Was musst du machen?', 'Разрешение получено. Теперь скажи действие.', {
       intent: 'happy',
-      lesson: 'bakeryDough',
     });
       return;
     }
@@ -3028,7 +3144,6 @@ async function sendBakeryDialogueToNpc(npc, message) {
     if (/teig|kneten/.test(text)) {
       await bakerySpeak(npc, 'Halt! Fragen! Sag: Darf ich?', 'Сначала спроси: Darf ich?', {
         intent: 'thinking',
-        lesson: 'bakeryPermission',
       });
       return;
     }
@@ -3127,7 +3242,6 @@ async function openMarketMerchantDialogue(npc) {
     await marketSpeak(npc, 'Guten Tag. Was moechtest du? Der Kaese ist frisch.', 'Use accusative: den Kaese.', {
       append: false,
       intent: 'greeting',
-      lesson: 'marketAccusative',
     });
     return;
   }
@@ -3136,7 +3250,6 @@ async function openMarketMerchantDialogue(npc) {
     await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier moechtest du?', 'Hans needs six eggs and milk.', {
       append: false,
       intent: 'greeting',
-      lesson: 'marketCount',
     });
     return;
   }
@@ -3145,7 +3258,6 @@ async function openMarketMerchantDialogue(npc) {
     await marketSpeak(npc, 'Frisches Gemuese! Rote, gruene oder gelbe Tomaten?', 'Choose a color.', {
       append: false,
       intent: 'greeting',
-      lesson: 'marketColor',
     });
   }
 }
@@ -3301,14 +3413,6 @@ async function questThreeSpeak(npc, de, ru = '', options = {}) {
   return speakQuestLine(npc, de, ru, {
     intent: options.intent || 'talk',
     append: options.append,
-    lesson: options.lesson,
-    ruIntro: options.ruIntro,
-    skipRuIntro: options.skipRuIntro,
-    forceRuIntro: options.forceRuIntro,
-    ruVoiceId: options.ruVoiceId,
-    ruRate: options.ruRate,
-    ruPitch: options.ruPitch,
-    ruVolume: options.ruVolume,
   });
 }
 
@@ -3382,7 +3486,6 @@ async function openQuestThreeDialogue(npc) {
     await questThreeSpeak(npc, 'Hm? Sag erst: Hallo.', 'Сначала поздоровайтесь: Hallo или Entschuldigung.', {
       append: false,
       intent: 'thinking',
-      lesson: 'questThreeGretaGreeting',
     });
     return;
   }
@@ -3391,7 +3494,6 @@ async function openQuestThreeDialogue(npc) {
   await questThreeSpeak(npc, 'Frag mich: Wer? Was? Wo?', 'Спроси меня: кто? что делает? где живёт?', {
     append: false,
     intent: 'helpful',
-    lesson: 'questThreeIntro',
   });
 }
 
@@ -3969,16 +4071,32 @@ function createQuestThreeNpc(definition, rigged) {
 }
 
 async function ensureQuestThreeNpcs() {
-  if (!navigation || !questThreeState.unlocked) {
-    return;
+  if (!questThreeState.unlocked) {
+    return [];
   }
 
-  await Promise.all(QUEST_THREE_NPCS.map((definition) => loadQuestThreeNpc(definition)));
+  if (!navigation) {
+    console.warn('Quest 3 NPC load delayed: navigation is not ready yet.');
+    return [];
+  }
+
+  const loadedNpcs = await Promise.all(QUEST_THREE_NPCS.map((definition) => loadQuestThreeNpc(definition)));
+  const loadedCount = loadedNpcs.filter(Boolean).length;
+
+  if (loadedCount < QUEST_THREE_NPCS.length) {
+    const message = `Quest 3 NPCs loaded: ${loadedCount}/${QUEST_THREE_NPCS.length}`;
+    console.warn(message);
+
+    if (locationState.current === LOCATION_VILLAGE) {
+      setStatus(message, 'error');
+    }
+  }
 
   syncAllNpcTargets();
   renderTargets();
   renderDorfbuch();
   publishDebugState();
+  return loadedNpcs;
 }
 
 function getMarketDefinition(id) {
@@ -4109,16 +4227,56 @@ function createMarketNpc(definition, rigged) {
 }
 
 async function ensureMarketNpcs() {
-  if (!navigation || !marketQuestState.unlocked) {
-    return;
+  if (!marketQuestState.unlocked) {
+    return [];
   }
 
-  await Promise.all(MARKET_MERCHANT_NPCS.map((definition) => loadMarketNpc(definition)));
+  if (!navigation) {
+    console.warn('Market NPC load delayed: navigation is not ready yet.');
+    return [];
+  }
+
+  const loadedNpcs = await Promise.all(MARKET_MERCHANT_NPCS.map((definition) => loadMarketNpc(definition)));
+  const loadedCount = loadedNpcs.filter(Boolean).length;
+
+  if (loadedCount < MARKET_MERCHANT_NPCS.length) {
+    const message = `Market NPCs loaded: ${loadedCount}/${MARKET_MERCHANT_NPCS.length}`;
+    console.warn(message);
+
+    if (locationState.current === LOCATION_VILLAGE) {
+      setStatus(message, 'error');
+    }
+  }
 
   syncAllNpcTargets();
   renderTargets();
   renderDorfbuch();
   publishDebugState();
+  return loadedNpcs;
+}
+
+async function ensureUnlockedQuestNpcs() {
+  if (!navigation) {
+    return;
+  }
+
+  const tasks = [];
+
+  if (questThreeState.unlocked) {
+    tasks.push(ensureQuestThreeNpcs());
+  }
+
+  if (marketQuestState.unlocked) {
+    tasks.push(ensureMarketNpcs());
+  }
+
+  const results = await Promise.allSettled(tasks);
+
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.error('Unlocked quest NPC load failed:', result.reason);
+    }
+  }
 }
 
 function createGasthausFallbackInterior() {
@@ -4796,7 +4954,6 @@ async function completeBakeryAction(action) {
     if (action === 'dough' && !bakeryQuestState.steps.permission) {
       await bakerySpeak(npc, 'Halt! Fragen! Sag: Darf ich?', 'Сначала спроси разрешение.', {
         intent: 'thinking',
-        lesson: 'bakeryPermission',
       });
       return true;
     }
@@ -4824,7 +4981,6 @@ async function completeBakeryAction(action) {
     setBakeryStatus('Mehl holen');
     await bakerySpeak(npc, 'Gut. Die Haende sind sauber. Kannst du das Mehl holen?', 'Руки чистые. Теперь мука.', {
       intent: 'happy',
-      lesson: 'bakeryFlour',
     });
     return true;
   }
@@ -4837,7 +4993,6 @@ async function completeBakeryAction(action) {
     setBakeryStatus('Wasser bringen');
     await bakerySpeak(npc, 'Sehr gut. Jetzt brauchen wir Wasser. Was musst du bringen?', 'Теперь нужна вода.', {
       intent: 'helpful',
-      lesson: 'bakeryWater',
     });
     return true;
   }
@@ -4850,7 +5005,6 @@ async function completeBakeryAction(action) {
     setBakeryStatus('frage: Darf ich?');
     await bakerySpeak(npc, 'Gut. Mehl und Wasser sind da. Willst du den Teig kneten? Frag zuerst: Darf ich?', 'Перед тестом спроси разрешение.', {
       intent: 'helpful',
-      lesson: 'bakeryPermission',
     });
     return true;
   }
@@ -4866,7 +5020,7 @@ async function completeBakeryAction(action) {
       npc,
       'Gut geknetet. Jetzt ohne Chips. Sag drei Saetze: Ich muss das Mehl holen. Ich muss den Teig kneten. Ich will Brot backen.',
       'Финал без chips: скажи три предложения.',
-      { intent: 'helpful', lesson: 'bakeryFinal' },
+      { intent: 'helpful' },
     );
     return true;
   }
@@ -6395,13 +6549,7 @@ async function loadNpcCharactersAndAnimations() {
     selectedNpc = npcs[0];
   }
 
-  if (questThreeState.unlocked) {
-    await ensureQuestThreeNpcs();
-  }
-
-  if (marketQuestState.unlocked) {
-    await ensureMarketNpcs();
-  }
+  await ensureUnlockedQuestNpcs();
 
   syncAllNpcTargets();
   renderTargets();
@@ -6733,9 +6881,21 @@ function setQuestStatus(message) {
   }
 }
 
-function setQuestSpeechLine(de, ru = '') {
-  questState.currentLine = { de, ru };
+function setQuestSpeechLine(de, ru = '', npc = null) {
+  questState.currentLine = { de, ru, npcId: npc?.id || null };
   renderDialogueHeader();
+}
+
+function getQuestSpeechLineForNpc(npc) {
+  if (!questState.currentLine) {
+    return null;
+  }
+
+  if (!npc || !questState.currentLine.npcId) {
+    return questState.currentLine;
+  }
+
+  return questState.currentLine.npcId === npc.id ? questState.currentLine : null;
 }
 
 function renderQuestSpeechLine() {
@@ -6751,14 +6911,35 @@ function renderQuestSpeechLine() {
   de.textContent = questState.currentLine.de;
   dialogueTarget.append(de);
 
-  if (questState.currentLine.ru) {
-    const ru = document.createElement('div');
-    ru.className = 'quest-line-ru';
-    ru.textContent = `(${questState.currentLine.ru})`;
-    dialogueTarget.append(ru);
+  return true;
+}
+
+function getDefaultDialoguePrompt() {
+  if (locationState.current === LOCATION_GASTHAUS) {
+    return gasthausQuest.completed
+      ? 'Подойдите к Berta или гостям Gasthaus'
+      : 'Подойдите к Frau Berta';
   }
 
-  return true;
+  if (locationState.current === LOCATION_BAKERY) {
+    return 'Подойдите к Hans в пекарне';
+  }
+
+  if (questThreeState.unlocked && !questThreeState.completed) {
+    return 'Подойдите к Hans, Greta или Ida';
+  }
+
+  if (marketQuestState.unlocked && !marketQuestState.completed) {
+    return marketQuestState.started
+      ? 'Подойдите к продавцу на Markt'
+      : 'Найдите Hans в центре деревни';
+  }
+
+  if (QUEST_ENABLED && !questState.completed) {
+    return 'Подойдите к стражнику у ворот';
+  }
+
+  return 'Подойдите к персонажу и нажмите E';
 }
 
 function insertDialogueTemplate(template) {
@@ -6779,6 +6960,7 @@ function renderQuestChips(chips = []) {
     return;
   }
 
+  chips = appendRussianHelpChip(chips);
   questChips.replaceChildren();
   questChips.hidden = chips.length === 0;
 
@@ -6816,6 +6998,11 @@ function renderQuestChips(chips = []) {
 
       if (chip.action === 'bakery-help') {
         showBakeryHelp();
+        return;
+      }
+
+      if (chip.action === 'russian-help') {
+        showRussianQuestHint();
         return;
       }
 
@@ -6959,76 +7146,16 @@ function parseQuestOrigin(input) {
   return null;
 }
 
-function getRussianLessonText(options = {}) {
-  if (options.skipRuIntro) {
-    return '';
-  }
-
-  if (options.ruIntro) {
-    return String(options.ruIntro).trim();
-  }
-
-  if (options.lesson) {
-    return RUSSIAN_LESSON_EXPLANATIONS[options.lesson] || '';
-  }
-
-  return '';
-}
-
-function shouldSpeakRussianLesson(options = {}, text = '') {
-  if (!text) {
-    return false;
-  }
-
-  const key = options.lesson || `inline:${text}`;
-
-  if (!options.forceRuIntro && spokenRussianLessonKeys.has(key)) {
-    return false;
-  }
-
-  spokenRussianLessonKeys.add(key);
-  return true;
-}
-
-async function speakRussianLesson(npc, options = {}) {
-  const text = getRussianLessonText(options);
-
-  if (!npc || !shouldSpeakRussianLesson(options, text)) {
-    return 0;
-  }
-
-  appendDialogue(npc, 'npc', text);
-  setQuestSpeechLine(text, 'Русское объяснение перед новым материалом');
-  faceNpcToAgent(npc, 1);
-  playNpcDialogueAnimation(npc, { animationIntent: options.intent || 'helpful' });
-
-  const duration =
-    (await npc.mouth?.speak(text, {
-      voiceId: options.ruVoiceId || ELEVENLABS_VOICES.russianNarrator,
-      lang: 'ru-RU',
-      rate: options.ruRate ?? 0.78,
-      pitch: options.ruPitch ?? 1,
-      volume: options.ruVolume ?? 0.92,
-    })) || Math.min(9, Math.max(1.4, text.length * 0.045));
-
-  npc.state = 'talking';
-  npc.talkUntil = performance.now() / 1000 + duration + 0.15;
-  await waitFor(Math.min(10000, Math.max(1000, duration * 1000 + 180)));
-  return duration;
-}
-
 async function speakQuestLine(npc, de, ru = '', options = {}) {
   if (!npc) {
     return 0;
   }
 
-  const lessonDuration = await speakRussianLesson(npc, options);
-
   if (options.append !== false) {
     appendDialogue(npc, 'npc', de);
   }
 
-  setQuestSpeechLine(de, ru);
+  setQuestSpeechLine(de, ru, npc);
   faceNpcToAgent(npc, 1);
   playNpcDialogueAnimation(npc, { animationIntent: options.intent || 'talk' });
 
@@ -7049,7 +7176,7 @@ async function speakQuestLine(npc, de, ru = '', options = {}) {
 
   npc.state = 'talking';
   npc.talkUntil = performance.now() / 1000 + duration + 0.2;
-  return lessonDuration + duration;
+  return duration;
 }
 
 function openQuestDialogue(npc = getQuestGuard()) {
@@ -7076,16 +7203,16 @@ function openQuestDialogue(npc = getQuestGuard()) {
   const greeting = guardGreeting();
   speakQuestLine(npc, `${greeting.de}. Wer bist du?`, `${greeting.ru}. Кто ты?`, {
     intent: 'greeting',
-    lesson: 'guardGreeting',
   });
 }
 
 function repeatQuestPrompt() {
   if (isMarketHans(selectedNpc) || isMarketNpc(selectedNpc)) {
     const npc = selectedNpc;
+    const currentLine = getQuestSpeechLineForNpc(npc);
 
-    if (questState.currentLine) {
-      marketSpeak(npc, questState.currentLine.de, questState.currentLine.ru, {
+    if (currentLine) {
+      marketSpeak(npc, currentLine.de, currentLine.ru, {
         append: false,
         intent: 'thinking',
       });
@@ -7096,9 +7223,10 @@ function repeatQuestPrompt() {
 
   if (isQuestThreeNpc(selectedNpc)) {
     const npc = selectedNpc;
+    const currentLine = getQuestSpeechLineForNpc(npc);
 
-    if (questState.currentLine) {
-      questThreeSpeak(npc, questState.currentLine.de, questState.currentLine.ru, {
+    if (currentLine) {
+      questThreeSpeak(npc, currentLine.de, currentLine.ru, {
         append: false,
         intent: 'thinking',
       });
@@ -7109,9 +7237,10 @@ function repeatQuestPrompt() {
 
   if (isGasthausNpc(selectedNpc)) {
     const npc = selectedNpc;
+    const currentLine = getQuestSpeechLineForNpc(npc);
 
-    if (questState.currentLine) {
-      gasthausSpeak(npc, questState.currentLine.de, questState.currentLine.ru, {
+    if (currentLine) {
+      gasthausSpeak(npc, currentLine.de, currentLine.ru, {
         append: false,
         intent: 'thinking',
       });
@@ -7121,12 +7250,13 @@ function repeatQuestPrompt() {
   }
 
   const npc = getQuestGuard();
+  const currentLine = getQuestSpeechLineForNpc(npc);
 
-  if (!npc || !questState.currentLine) {
+  if (!npc || !currentLine) {
     return;
   }
 
-  speakQuestLine(npc, questState.currentLine.de, questState.currentLine.ru, {
+  speakQuestLine(npc, currentLine.de, currentLine.ru, {
     append: false,
     intent: 'thinking',
   });
@@ -7238,7 +7368,7 @@ async function sendQuestDialogueToGuard(npc, message) {
       ? `${parsed.value}! Gut. Und woher kommst du?`
       : `${parsed.value}? Ah - ich bin ${parsed.value}. Gut. Und woher kommst du?`;
     const ru = `${parsed.value}! Хорошо. А откуда ты?`;
-    speakQuestLine(npc, de, ru, { intent: 'thankful', lesson: 'guardOrigin' });
+    speakQuestLine(npc, de, ru, { intent: 'thankful' });
     return;
   }
 
@@ -7425,6 +7555,7 @@ function renderDialogueHeader() {
   }
 
   const target = selectedNpc || nearbyNpc;
+  const currentLine = getQuestSpeechLineForNpc(target);
 
   if (
     ((isQuestGuard(target) && !questState.completed) ||
@@ -7433,7 +7564,7 @@ function renderDialogueHeader() {
       isMarketHans(target) ||
       isMarketNpc(target) ||
       isQuestThreeNpc(target)) &&
-    questState.currentLine
+    currentLine
   ) {
     renderQuestSpeechLine();
     interactNpcButton.disabled = false;
@@ -7457,7 +7588,7 @@ function renderDialogueHeader() {
   dialogueTarget.classList.remove('quest-line');
 
   if (!target) {
-    dialogueTarget.textContent = QUEST_ENABLED ? 'Подойдите к стражнику у ворот' : 'Подойдите к персонажу и нажмите E';
+    dialogueTarget.textContent = getDefaultDialoguePrompt();
     interactNpcButton.disabled = true;
     dialogueInput.disabled = true;
     dialogueSubmit.disabled = true;
@@ -8767,6 +8898,7 @@ async function rebuildNavigation() {
     renderNavAreaBlocks();
     setInitialAgentPosition();
     placeNpcTarget();
+    await ensureUnlockedQuestNpcs();
     renderTargets();
     publishDebugState();
     setStatus(
