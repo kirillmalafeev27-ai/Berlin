@@ -133,6 +133,9 @@ const NPC_INTERACTION_DISTANCE = 6;
 const NPC_TALK_STOP_DISTANCE = 4.1;
 const NPC_APPROACH_DISTANCE = 3;
 const NPC_TARGET_HEIGHT = 2.3;
+const NPC_VISUAL_ANCHOR_EPSILON = 0.01;
+const NPC_VISUAL_ANCHOR_WARN_DISTANCE = 0.55;
+const NPC_VISUAL_ANCHOR_CHECK_INTERVAL = 0.25;
 const NPC_PATROL_WAIT_MIN = 1.2;
 const NPC_PATROL_WAIT_MAX = 4.8;
 const NPC_PATROL_REPATH_INTERVAL = 0.7;
@@ -202,7 +205,7 @@ const GASTHAUS_NPCS = [
     aliases: ['berta', 'frau berta', 'wirtin', 'innkeeper', 'хозяйка'],
     // Default placement saved from the in-game Gasthaus layout.
     modelUrl: GASTHAUS_CHARACTER_URLS.grandmother,
-    position: new THREE.Vector3(-1.81, -0.9, 2.53),
+    position: new THREE.Vector3(-1.81, GASTHAUS_BOUNDS.y, 2.53),
     yaw: 1.2209,
     voiceId: ELEVENLABS_VOICES.charlotte,
     color: 0x7d3f98,
@@ -214,7 +217,7 @@ const GASTHAUS_NPCS = [
     aliases: ['jörg', 'joerg', 'gast', 'guest', 'постоялец'],
     // Default placement saved from the in-game Gasthaus layout.
     modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
-    position: new THREE.Vector3(3.86, -1.0, -1.567),
+    position: new THREE.Vector3(3.86, GASTHAUS_BOUNDS.y, -1.567),
     yaw: -0.2618,
     seated: true,
     voiceId: ELEVENLABS_VOICES.josh,
@@ -228,14 +231,25 @@ const GASTHAUS_NPCS = [
     aliases: ['hans', 'baecker', 'bäcker', 'baker', 'пекарь'],
     modelUrl: GASTHAUS_CHARACTER_URLS.chef,
     // Default placement saved from the in-game Gasthaus layout.
-    position: new THREE.Vector3(3.907, -1.0, 2.744),
+    position: new THREE.Vector3(3.907, GASTHAUS_BOUNDS.y, 2.744),
     yaw: 2.8798,
     seated: true,
     voiceId: ELEVENLABS_VOICES.antoni,
     color: 0xc57b2d,
   },
 ];
-const SOURCE_LOCKED_NPC_IDS = new Set(GASTHAUS_NPCS.map((npc) => npc.id));
+const SOURCE_LOCKED_NPC_IDS = new Set([
+  'frau_berta',
+  'gast_joerg',
+  'gast_hans',
+  'baecker_hans',
+  'muellerin_greta',
+  'lehrerin_ida',
+  'kaesehaendler_otto',
+  'eierfrau_lena',
+  'gemuesehaendlerin_rosa',
+  'baeckerei_hans',
+]);
 const GASTHAUS_DOOR_TARGETS = [
   { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.2, 0, -3.6) },
   { id: 'room_zwei', label: 'Tür zwei', word: 'zwei', position: new THREE.Vector3(-1.8, 0, -3.6) },
@@ -3886,6 +3900,7 @@ function buildGasthausNpc(definition, rigged) {
     calibrateNpcGroundBias(npc);
     npc.groundBiasDirty = false;
     refitNpcToGround(npc);
+    anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
   }
 
   return npc;
@@ -3896,18 +3911,11 @@ function buildGasthausNpc(definition, rigged) {
 // per-frame re-ground, which is why they previously floated at standing height
 // and appeared to slide across the scene as the camera moved).
 function groundSeatedNpc(npc) {
-  if (!npc?.visual) {
-    return;
-  }
-
-  npc.visual.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(npc.visual);
-
-  if (box.isEmpty() || !Number.isFinite(box.min.y)) {
-    return;
-  }
-
-  npc.visual.position.y -= box.min.y - npc.root.position.y;
+  anchorNpcVisualToRoot(npc, {
+    horizontal: true,
+    vertical: true,
+    warn: true,
+  });
 }
 
 function applyGasthausSeatedIdle(npc) {
@@ -4066,6 +4074,7 @@ function createQuestThreeNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
   syncNpcTarget(npc);
   return npc;
 }
@@ -4222,6 +4231,7 @@ function createMarketNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
   syncNpcTarget(npc);
   return npc;
 }
@@ -4601,6 +4611,7 @@ function createBakeryNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
   syncNpcTarget(npc);
   return npc;
 }
@@ -5399,6 +5410,56 @@ function getAnimationTargetNames(root) {
   return names;
 }
 
+function normalizeTrackId(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function getTrackPropertyName(trackName) {
+  const text = String(trackName || '');
+  const index = text.lastIndexOf('.');
+  return index >= 0 ? text.slice(index + 1) : '';
+}
+
+function isRootMotionPositionTrack(npc, track) {
+  if (getTrackPropertyName(track.name).toLowerCase() !== 'position') {
+    return false;
+  }
+
+  const target = normalizeTrackId(getTrackTargetName(track.name));
+  const rootName = normalizeTrackId(npc?.root?.name);
+  const visualName = normalizeTrackId(npc?.visual?.name);
+
+  return (
+    target === rootName ||
+    target === visualName ||
+    target === 'armature' ||
+    target === 'root' ||
+    target.endsWith('root') ||
+    target.includes('hips')
+  );
+}
+
+function stripHorizontalRootMotion(npc, track) {
+  if (!isRootMotionPositionTrack(npc, track) || typeof track.getValueSize !== 'function') {
+    return track;
+  }
+
+  const size = track.getValueSize();
+
+  if (size < 3 || !track.values?.length) {
+    return track;
+  }
+
+  const clone = track.clone();
+
+  for (let i = 0; i < clone.values.length; i += size) {
+    clone.values[i] = 0;
+    clone.values[i + 2] = 0;
+  }
+
+  return clone;
+}
+
 function getNpcAnimationClip(npc, animationName) {
   if (!npc || !characterAnimations.has(animationName)) {
     return null;
@@ -5414,9 +5475,11 @@ function getNpcAnimationClip(npc, animationName) {
 
   const clip = characterAnimations.get(animationName);
   const targetNames = getAnimationTargetNames(npc.root);
-  const tracks = clip.tracks.filter((track) => targetNames.has(getTrackTargetName(track.name)));
+  const tracks = clip.tracks
+    .filter((track) => targetNames.has(getTrackTargetName(track.name)))
+    .map((track) => stripHorizontalRootMotion(npc, track));
   const compatibleClip =
-    tracks.length === clip.tracks.length
+    tracks.length === clip.tracks.length && tracks.every((track, index) => track === clip.tracks[index])
       ? clip
       : new THREE.AnimationClip(clip.name, clip.duration, tracks);
 
@@ -6021,17 +6084,25 @@ function placeNpcOnNavmesh(npc, index, total) {
 
 const _groundBox = new THREE.Box3();
 const _groundVertex = new THREE.Vector3();
+const _visibleBounds = new THREE.Box3();
+const _meshBounds = new THREE.Box3();
+const _visualCenter = new THREE.Vector3();
+const _rootWorldPosition = new THREE.Vector3();
+const _visualWorldDelta = new THREE.Vector3();
+const _anchorWorldFrom = new THREE.Vector3();
+const _anchorWorldTo = new THREE.Vector3();
+const _anchorLocalFrom = new THREE.Vector3();
+const _anchorLocalTo = new THREE.Vector3();
 
-// Lowest world-space Y across an object's meshes, honouring skeletal skinning.
+// World-space bounds across an object's meshes, honouring skeletal skinning.
 // THREE.Box3.setFromObject() reads the bind-pose geometry and ignores bone
 // transforms, so for an animated SkinnedMesh it returns the T-pose bounds. A
-// Mixamo idle then shifts the body up via its Hips track, which is exactly why
-// the character floats. We sample the actually-deformed vertices for skinned
-// meshes (falling back to the bounding box otherwise) so grounding matches what
-// the player sees on screen.
-function computeSkinnedMinWorldY(object) {
+// Mixamo clip can shift the body via its Hips track, which is exactly why root
+// and rendered body can disagree. Sample the actually-deformed vertices for
+// skinned meshes so grounding and anchoring match what the player sees.
+function computeVisibleNpcBounds(object, targetBox = _visibleBounds) {
   object.updateMatrixWorld(true);
-  let minY = Infinity;
+  targetBox.makeEmpty();
 
   object.traverse((child) => {
     if (!child.isMesh) {
@@ -6048,23 +6119,135 @@ function computeSkinnedMinWorldY(object) {
       for (let i = 0; i < count; i += 1) {
         child.getVertexPosition(i, _groundVertex);
         _groundVertex.applyMatrix4(child.matrixWorld);
-
-        if (_groundVertex.y < minY) {
-          minY = _groundVertex.y;
-        }
+        targetBox.expandByPoint(_groundVertex);
       }
 
       return;
     }
 
-    _groundBox.setFromObject(child);
+    _meshBounds.setFromObject(child);
 
-    if (!_groundBox.isEmpty() && _groundBox.min.y < minY) {
-      minY = _groundBox.min.y;
+    if (!_meshBounds.isEmpty()) {
+      targetBox.union(_meshBounds);
     }
   });
 
-  return minY;
+  return targetBox;
+}
+
+function computeSkinnedMinWorldY(object) {
+  const bounds = computeVisibleNpcBounds(object, _visibleBounds);
+  return bounds.isEmpty() ? Infinity : bounds.min.y;
+}
+
+function getNpcAnchorFloorY(npc) {
+  if (npc?.location === LOCATION_GASTHAUS) {
+    return GASTHAUS_BOUNDS.y;
+  }
+
+  if (npc?.location === LOCATION_BAKERY) {
+    return BAKERY_BOUNDS.y;
+  }
+
+  return npc?.root?.position?.y ?? 0;
+}
+
+function moveNpcVisualByWorldDelta(npc, delta) {
+  if (!npc?.visual || !npc.visual.parent || !delta) {
+    return false;
+  }
+
+  npc.visual.parent.updateMatrixWorld(true);
+  _anchorWorldFrom.set(0, 0, 0);
+  _anchorWorldFrom.applyMatrix4(npc.visual.parent.matrixWorld);
+  _anchorWorldTo.copy(_anchorWorldFrom).add(delta);
+  _anchorLocalFrom.copy(_anchorWorldFrom);
+  _anchorLocalTo.copy(_anchorWorldTo);
+  npc.visual.parent.worldToLocal(_anchorLocalFrom);
+  npc.visual.parent.worldToLocal(_anchorLocalTo);
+  npc.visual.position.add(_anchorLocalTo.sub(_anchorLocalFrom));
+  npc.visual.updateMatrixWorld(true);
+  return true;
+}
+
+function getNpcVisualAnchorObject(npc) {
+  if (!npc?.visual) {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(npc, 'visualAnchorObject')) {
+    return npc.visualAnchorObject;
+  }
+
+  let anchor = null;
+  npc.visual.traverse((object) => {
+    if (!anchor && /hips|pelvis/i.test(object.name || '')) {
+      anchor = object;
+    }
+  });
+  npc.visualAnchorObject = anchor;
+  return anchor;
+}
+
+function getNpcHorizontalAnchorPosition(npc, bounds) {
+  const anchor = getNpcVisualAnchorObject(npc);
+
+  if (anchor) {
+    anchor.getWorldPosition(_visualCenter);
+    return _visualCenter;
+  }
+
+  bounds.getCenter(_visualCenter);
+  return _visualCenter;
+}
+
+function anchorNpcVisualToRoot(npc, options = {}) {
+  if (!npc?.visual || !npc?.root) {
+    return false;
+  }
+
+  const horizontal = options.horizontal !== false;
+  const vertical = options.vertical !== false;
+  const bounds = computeVisibleNpcBounds(npc.visual, _visibleBounds);
+
+  if (bounds.isEmpty() || !Number.isFinite(bounds.min.y)) {
+    return false;
+  }
+
+  getNpcHorizontalAnchorPosition(npc, bounds);
+  npc.root.getWorldPosition(_rootWorldPosition);
+  _visualWorldDelta.set(
+    horizontal ? _rootWorldPosition.x - _visualCenter.x : 0,
+    vertical ? getNpcAnchorFloorY(npc) - bounds.min.y : 0,
+    horizontal ? _rootWorldPosition.z - _visualCenter.z : 0,
+  );
+
+  const horizontalDrift = Math.hypot(_visualWorldDelta.x, _visualWorldDelta.z);
+
+  if (
+    options.warn &&
+    horizontalDrift > NPC_VISUAL_ANCHOR_WARN_DISTANCE &&
+    performance.now() / 1000 - (npc.lastVisualAnchorWarningAt || 0) > 2
+  ) {
+    npc.lastVisualAnchorWarningAt = performance.now() / 1000;
+    console.warn(
+      `NPC visual/root drift corrected for ${npc.id}: ${horizontalDrift.toFixed(2)}m`,
+      {
+        root: serializeVector(_rootWorldPosition),
+        visualCenter: serializeVector(_visualCenter),
+      },
+    );
+  }
+
+  if (
+    Math.abs(_visualWorldDelta.x) < NPC_VISUAL_ANCHOR_EPSILON &&
+    Math.abs(_visualWorldDelta.y) < NPC_VISUAL_ANCHOR_EPSILON &&
+    Math.abs(_visualWorldDelta.z) < NPC_VISUAL_ANCHOR_EPSILON
+  ) {
+    return true;
+  }
+
+  return moveNpcVisualByWorldDelta(npc, _visualWorldDelta);
 }
 
 // Measure the constant gap between the cheap rest-pose bounding box (evaluated
@@ -6107,11 +6290,7 @@ function fitNpcVisualToGround(npc) {
     npc.visual.updateMatrixWorld(true);
   }
 
-  const fittedBox = new THREE.Box3().setFromObject(npc.visual);
-  const center = fittedBox.getCenter(new THREE.Vector3());
-  npc.visual.position.x -= center.x - npc.root.position.x;
-  npc.visual.position.z -= center.z - npc.root.position.z;
-  npc.visual.position.y -= fittedBox.min.y - npc.root.position.y;
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
 }
 
 function refitNpcToGround(npc) {
@@ -6132,7 +6311,7 @@ function refitNpcToGround(npc) {
   const bottomOffset = skinnedBottom - npc.root.position.y;
 
   if (Math.abs(bottomOffset) > 0.02) {
-    npc.visual.position.y -= bottomOffset;
+    moveNpcVisualByWorldDelta(npc, _visualWorldDelta.set(0, -bottomOffset, 0));
   }
 }
 
@@ -6187,9 +6366,11 @@ function playNpcAnimation(npc, animationName, options = {}) {
   npc.currentAction = action;
 
   // A different clip may plant the feet at a different height relative to the
-  // rest pose, so re-measure the grounding bias on the next frame.
+  // rest pose or carry root motion, so re-measure and re-anchor on the next
+  // frame.
   if (npc.currentAnimationName !== animationName) {
     npc.groundBiasDirty = true;
+    npc.visualAnchorDirty = true;
   }
 
   npc.currentAnimationName = animationName;
@@ -6472,6 +6653,7 @@ function createNpcFromGltf(gltf, url, index, total) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
   return npc;
 }
 
@@ -6840,6 +7022,22 @@ function updateNpcs(deltaTime) {
     // would fight the sitting animation's hip motion and make them bob.
     if (!npc.seated) {
       refitNpcToGround(npc);
+    }
+
+    if (npc.visualAnchorDirty || npc.seated || npc.lockIdle || npc.manualPlacementLocked) {
+      const shouldAnchor =
+        npc.visualAnchorDirty ||
+        now - (npc.lastVisualAnchorAt || 0) >= NPC_VISUAL_ANCHOR_CHECK_INTERVAL;
+
+      if (shouldAnchor) {
+        anchorNpcVisualToRoot(npc, {
+          horizontal: true,
+          vertical: false,
+          warn: true,
+        });
+        npc.visualAnchorDirty = false;
+        npc.lastVisualAnchorAt = now;
+      }
     }
 
     npc.mouth?.update(deltaTime);
