@@ -94,7 +94,7 @@ const mixamoBaseDir = firstExistingDir(MIXAMO_BASE_CANDIDATES);
 const animationSearchDirs = ['', 'animations', 'mixamo', 'assets'];
 // Rigged, lip-synced characters live under characters/; Mixamo body-animation
 // clips under glb/.
-const riggedCharacterDirs = [path.join(mixamoBaseDir, 'characters'), path.join(mixamoBaseDir, 'glb')];
+const riggedCharacterDirs = [path.join(mixamoBaseDir, 'characters')];
 const bodyAnimationDir = path.join(mixamoBaseDir, 'glb');
 const characterFile = 'Meshy_AI_Character_output.fbx';
 const bodyAnimationFiles = new Set([
