@@ -166,10 +166,10 @@ const GASTHAUS_DOOR_POINT = new THREE.Vector3(72.0, 4.82, 57.0);
 const GASTHAUS_APPROACH_POINT = new THREE.Vector3(81.32, 5.02, 40.58);
 const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
 const GASTHAUS_ENTRY_RADIUS = 2.1;
-const BAKERY_DOOR_POINT = new THREE.Vector3(66.4, 4.82, 58.0);
-const BAKERY_APPROACH_POINT = new THREE.Vector3(67.1, 4.82, 58.7);
+const BAKERY_DOOR_POINT = new THREE.Vector3(39.452, 5.02, 80.653);
+const BAKERY_APPROACH_POINT = new THREE.Vector3(39.452, 5.02, 80.653);
 const BAKERY_RETURN_POINT = new THREE.Vector3(67.4, 4.82, 59.6);
-const BAKERY_ENTRY_RADIUS = 1.15;
+const BAKERY_ENTRY_RADIUS = 3.1;
 // Interior coordinates for "Tavern noch eine": the floor is centred on the
 // origin (X in [-5.4, 5.4], Z in [-4.3, 4.3]) with its surface at y = 0. The
 // entrance is on the +Z (front) side; the bar sits front-left, the fireplace
