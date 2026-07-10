@@ -33,6 +33,7 @@ const pickCancel = document.querySelector('#pick-cancel');
 const exportOutput = document.querySelector('#export-output');
 const dialoguePanel = document.querySelector('.dialogue-panel');
 const questStatus = document.querySelector('#quest-status');
+const hudQuestLabel = document.querySelector('#hud-quest');
 const dialogueTarget = document.querySelector('#dialogue-target');
 const dialogueLog = document.querySelector('#dialogue-log');
 const questChips = document.querySelector('#quest-chips');
@@ -139,6 +140,11 @@ const NPC_TARGET_HEIGHT = 2.3;
 // ~93% of body height, so the camera meets the NPCs at eye level.
 const PLAYER_EYE_HEIGHT = 2.14;
 const PLAYER_SEATED_EYE_HEIGHT = 1.39;
+// The bakery interior is authored at real-life scale (ceiling ≈ 2.5, counter
+// tops ≈ 0.9 above the floor boards), so the 2.3-unit villagers loom against
+// the ceiling there. Use human proportions inside: 1.75 tall, eyes at ~93%.
+const BAKERY_NPC_HEIGHT = 1.75;
+const BAKERY_PLAYER_EYE_HEIGHT = 1.63;
 const NPC_PATROL_WAIT_MIN = 1.2;
 const NPC_PATROL_WAIT_MAX = 4.8;
 const NPC_PATROL_REPATH_INTERVAL = 0.7;
@@ -170,9 +176,9 @@ const GASTHAUS_DOOR_POINT = new THREE.Vector3(72.0, 4.82, 57.0);
 const GASTHAUS_APPROACH_POINT = new THREE.Vector3(71.35, 4.82, 57.65);
 const GASTHAUS_RETURN_POINT = new THREE.Vector3(70.2, 4.82, 61.0);
 const GASTHAUS_ENTRY_RADIUS = 1.15;
-const BAKERY_DOOR_POINT = new THREE.Vector3(66.4, 4.82, 58.0);
-const BAKERY_APPROACH_POINT = new THREE.Vector3(67.1, 4.82, 58.7);
-const BAKERY_RETURN_POINT = new THREE.Vector3(67.4, 4.82, 59.6);
+const BAKERY_DOOR_POINT = new THREE.Vector3(39.452, 5.02, 80.653);
+const BAKERY_APPROACH_POINT = new THREE.Vector3(39.452, 5.02, 80.653);
+const BAKERY_RETURN_POINT = new THREE.Vector3(40.6, 5.02, 79.5);
 const BAKERY_ENTRY_RADIUS = 1.15;
 // Interior coordinates for "Tavern noch eine": the floor is centred on the
 // origin (X in [-5.4, 5.4], Z in [-4.3, 4.3]) with its surface at y = 0. The
@@ -180,7 +186,7 @@ const BAKERY_ENTRY_RADIUS = 1.15;
 // back-right.
 const GASTHAUS_PLAYER_SPAWN = new THREE.Vector3(2.2, 0.03, 3.4);
 const GASTHAUS_BOUNDS = { minX: -4.9, maxX: 4.9, minZ: -3.9, maxZ: 3.9, y: 0.03 };
-const BAKERY_PLAYER_SPAWN = new THREE.Vector3(0.7, 0.04, 3.2);
+const BAKERY_PLAYER_SPAWN = new THREE.Vector3(-2.548, 0.04, -0.121);
 const BAKERY_BOUNDS = { minX: -4.8, maxX: 4.8, minZ: -3.8, maxZ: 3.8, y: 0.04 };
 const GASTHAUS_ENTRY_TARGET = {
   id: GASTHAUS_ENTRY_TARGET_ID,
@@ -379,8 +385,9 @@ const BAKERY_NPCS = [
     aliases: ['hans', 'baecker hans', 'bäcker hans', 'baecker', 'bäcker', 'пекарь'],
     modelUrl: GASTHAUS_CHARACTER_URLS.chef,
     voiceId: ELEVENLABS_VOICES.antoni,
-    position: new THREE.Vector3(-1.9, 0.04, -1.0),
-    yaw: Math.PI / 2,
+    // Behind the counter, facing the player spawn.
+    position: new THREE.Vector3(-0.95, 0.04, 1.971),
+    yaw: -2.49,
   },
 ];
 const MARKET_EGG_NUMBERS = new Map([
@@ -804,13 +811,13 @@ const RUSSIAN_LESSON_EXPLANATIONS = {
   marketCount:
     'Теперь тренируем количество. Для яиц нужно сказать точное число: sechs Eier.',
   marketColor:
-    'Теперь тренируем цвета. Выбери цвет помидоров: rote, gruene или gelbe Tomaten.',
+    'Теперь тренируем цвета. Выбери цвет помидоров: rote, grüne или gelbe Tomaten.',
   bakeryIntro:
     'В пекарне начинается новый материал: модальные глаголы. Модальный глагол стоит на втором месте, а смысловой глагол уходит в конец.',
   bakeryWash:
-    'Первый шаг: Ich muss. Скажи действие рамкой: Ich muss die Haende waschen. Глагол waschen в конце.',
+    'Первый шаг: Ich muss. Скажи действие рамкой: Ich muss die Hände waschen. Глагол waschen в конце.',
   bakeryFlour:
-    'Теперь просьба с koennen: Ich kann das Mehl holen. Инфинитив holen тоже стоит в конце.',
+    'Теперь просьба с können: Ich kann das Mehl holen. Инфинитив holen тоже стоит в конце.',
   bakeryWater:
     'Теперь bringe Wasser. Скажи: Ich muss das Wasser bringen. Смысловой глагол bringen в конце.',
   bakeryPermission:
@@ -2433,7 +2440,7 @@ function getMarketMissingItem() {
   if (!marketHasListItem('cheese')) {
     return {
       key: 'cheese',
-      de: 'Der Kaese fehlt. Geh zu Otto und sag: Ich moechte den Kaese.',
+      de: 'Der Käse fehlt. Geh zu Otto und sag: Ich möchte den Käse.',
     };
   }
 
@@ -2462,7 +2469,7 @@ function isMarketBasketComplete() {
 }
 
 function marketBasketSummary() {
-  const cheese = marketQuestState.basket.cheese ? 'Kaese: ja' : 'Kaese: fehlt';
+  const cheese = marketQuestState.basket.cheese ? 'Käse: ja' : 'Käse: fehlt';
   const eggs = marketQuestState.basket.eggs ? `Eier: ${getGermanNumber(marketQuestState.basket.eggs)}` : 'Eier: fehlen';
   const milk = marketQuestState.basket.milk ? 'Milch: ja' : 'Milch: fehlt';
   const tomatoes = marketQuestState.basket.tomatoes ? `Tomaten: ${marketQuestState.basket.tomatoes}` : 'Tomaten: frei';
@@ -2491,8 +2498,8 @@ function marketChipsForNpc(npc) {
 
   if (npc.id === 'kaesehaendler_otto') {
     return [
-      { label: 'Ich moechte den Kaese', submit: 'Ich moechte den Kaese' },
-      { label: 'Ich nehme einen Kaese', submit: 'Ich nehme einen Kaese' },
+      { label: 'Ich möchte den Käse', submit: 'Ich möchte den Käse' },
+      { label: 'Ich nehme einen Käse', submit: 'Ich nehme einen Käse' },
       { label: 'Hilfe', action: 'market-help' },
     ];
   }
@@ -2508,7 +2515,7 @@ function marketChipsForNpc(npc) {
   if (npc.id === 'gemuesehaendlerin_rosa') {
     return [
       { label: 'Die roten Tomaten', submit: 'Die roten Tomaten, bitte' },
-      { label: 'Die gruenen Tomaten', submit: 'Die gruenen Tomaten, bitte' },
+      { label: 'Die grünen Tomaten', submit: 'Die grünen Tomaten, bitte' },
       { label: 'Hilfe', action: 'market-help' },
     ];
   }
@@ -2550,7 +2557,7 @@ function showMarketHelp(npc = selectedNpc) {
   }
 
   if (npc.id === 'kaesehaendler_otto') {
-    marketSpeak(npc, 'Bei Otto: der Kaese wird im Akkusativ DEN Kaese.', 'Say: Ich moechte den Kaese.', {
+    marketSpeak(npc, 'Bei Otto: der Käse wird im Akkusativ DEN Käse.', 'Say: Ich möchte den Käse.', {
       intent: 'helpful',
     });
     return;
@@ -2564,7 +2571,7 @@ function showMarketHelp(npc = selectedNpc) {
   }
 
   if (npc.id === 'gemuesehaendlerin_rosa') {
-    marketSpeak(npc, 'Bei Rosa: Waehle eine Farbe. Die roten Tomaten oder die gruenen Tomaten.', 'Choose red or green tomatoes.', {
+    marketSpeak(npc, 'Bei Rosa: Wähle eine Farbe. Die roten Tomaten oder die grünen Tomaten.', 'Choose red or green tomatoes.', {
       intent: 'helpful',
     });
   }
@@ -2627,7 +2634,7 @@ function getMarketTomatoColor(input) {
   }
 
   if (/\b(?:grun|gruen|grune|gruene|grunen|gruenen|green)\b/.test(text)) {
-    return 'gruene';
+    return 'grüne';
   }
 
   if (/\b(?:gelb|gelbe|gelben|yellow)\b/.test(text)) {
@@ -2652,7 +2659,7 @@ async function completeMarketQuest(npc) {
   setMarketStatus('abgeschlossen');
   await marketSpeak(
     npc,
-    'Alles da: den Kaese, sechs Eier und die Milch. Sehr gut! Hier sind zwei Muenzen. Willst du helfen? Komm in die Baeckerei. Ich zeige dir alles!',
+    'Alles da: den Käse, sechs Eier und die Milch. Sehr gut! Hier sind zwei Münzen. Willst du helfen? Komm in die Bäckerei. Ich zeige dir alles!',
     'Quest 04 geschafft. Reward: +2 coins. Hans зовёт в пекарню.',
     { intent: 'happy' },
   );
@@ -2682,7 +2689,7 @@ async function openMarketHansDialogue(npc) {
     setMarketStatus('kaufe die Liste');
     await marketSpeak(
       npc,
-      `Geh bitte zum Markt. ${getMarketListText()} Otto hat Kaese, Lena hat Eier und Milch, Rosa hat Gemuese.`,
+      `Geh bitte zum Markt. ${getMarketListText()} Otto hat Käse, Lena hat Eier und Milch, Rosa hat Gemüse.`,
       'Buy the shopping list in the village market.',
       { append: false, intent: 'helpful', lesson: 'marketIntro' },
     );
@@ -2694,7 +2701,7 @@ async function openMarketHansDialogue(npc) {
       unlockBakeryQuest();
     }
 
-    await marketSpeak(npc, 'Der Einkauf war gut. Danke! Komm in die Baeckerei. Ich zeige dir alles.', 'Market quest already finished. Bakery unlocked.', {
+    await marketSpeak(npc, 'Der Einkauf war gut. Danke! Komm in die Bäckerei. Ich zeige dir alles.', 'Market quest already finished. Bakery unlocked.', {
       append: false,
       intent: 'happy',
     });
@@ -2707,7 +2714,7 @@ async function openMarketHansDialogue(npc) {
   }
 
   const missing = getMarketMissingItem();
-  setMarketStatus('Korb pruefen');
+  setMarketStatus('Korb prüfen');
   await marketSpeak(npc, `${missing.de} ${getMarketListText()}`, marketBasketSummary(), {
     append: false,
     intent: 'helpful',
@@ -2769,7 +2776,7 @@ function bakeryChipsForStage() {
 
   if (bakeryQuestState.stage === 'wash_phrase') {
     return [
-      { label: 'Ich muss die Haende waschen', submit: 'Ich muss die Haende waschen' },
+      { label: 'Ich muss die Hände waschen', submit: 'Ich muss die Hände waschen' },
       { label: 'Hilfe', action: 'bakery-help' },
     ];
   }
@@ -2879,7 +2886,7 @@ async function showBakeryHelp(npc = getBakeryHans()) {
   const stage = bakeryQuestState.stage;
 
   if (stage === 'wash_phrase') {
-    await bakerySpeak(npc, 'Sag: Ich muss die Haende waschen.', 'Скажи: Ich muss die Hände waschen.', {
+    await bakerySpeak(npc, 'Sag: Ich muss die Hände waschen.', 'Скажи: Ich muss die Hände waschen.', {
       intent: 'helpful',
       lesson: 'bakeryWash',
     });
@@ -2939,10 +2946,10 @@ async function startBakeryQuest(npc) {
   bakeryQuestState.stage = 'wash_phrase';
   bakeryQuestState.pendingAction = '';
   renderDorfbuch();
-  setBakeryStatus('Haende waschen');
+  setBakeryStatus('Hände waschen');
   await bakerySpeak(
     npc,
-    'Zuerst - die Haende waschen! Was musst du machen?',
+    'Zuerst - die Hände waschen! Was musst du machen?',
     'Сначала вымыть руки. Ответь модальной рамкой.',
     { intent: 'helpful', lesson: 'bakeryWash' },
   );
@@ -3027,15 +3034,15 @@ async function sendBakeryDialogueToNpc(npc, message) {
 
   if (bakeryQuestState.stage === 'wash_phrase') {
     if (bakeryHasCorrectModal(line, 'muss', /(?:die )?haende|(?:die )?hande/, 'waschen')) {
-      setBakeryPendingAction('wash_action', 'wash_hands', 'klicke auf die Haende');
-      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Klick die Haende.', 'Верно. Теперь кликни умывальник.', {
+      setBakeryPendingAction('wash_action', 'wash_hands', 'klicke auf die Hände');
+      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Klick die Hände.', 'Верно. Теперь кликни умывальник.', {
         intent: 'happy',
       });
       return;
     }
 
     if (bakeryHasMisplacedInfinitive(line, 'muss', 'waschen')) {
-      await bakeryClarifyWordOrder(npc, 'die Haende', 'waschen');
+      await bakeryClarifyWordOrder(npc, 'die Hände', 'waschen');
       return;
     }
   }
@@ -3185,7 +3192,7 @@ async function openMarketMerchantDialogue(npc) {
   faceAgentToNpc(npc);
 
   if (npc.id === 'kaesehaendler_otto') {
-    await marketSpeak(npc, 'Guten Tag. Was moechtest du? Der Kaese ist frisch.', 'Use accusative: den Kaese.', {
+    await marketSpeak(npc, 'Guten Tag. Was möchtest du? Der Käse ist frisch.', 'Use accusative: den Käse.', {
       append: false,
       intent: 'greeting',
       lesson: 'marketAccusative',
@@ -3194,7 +3201,7 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'eierfrau_lena') {
-    await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier moechtest du?', 'Hans needs six eggs and milk.', {
+    await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier möchtest du?', 'Hans needs six eggs and milk.', {
       append: false,
       intent: 'greeting',
       lesson: 'marketCount',
@@ -3203,7 +3210,7 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'gemuesehaendlerin_rosa') {
-    await marketSpeak(npc, 'Frisches Gemuese! Rote, gruene oder gelbe Tomaten?', 'Choose a color.', {
+    await marketSpeak(npc, 'Frisches Gemüse! Rote, grüne oder gelbe Tomaten?', 'Choose a color.', {
       append: false,
       intent: 'greeting',
       lesson: 'marketColor',
@@ -3215,7 +3222,7 @@ async function handleOttoMarketLine(npc, line) {
   const text = normalizeText(line);
 
   if (!marketWantsCheese(text)) {
-    await marketSpeak(npc, 'Ich verkaufe Kaese. Sag: Ich moechte den Kaese.', 'Otto sells cheese.', {
+    await marketSpeak(npc, 'Ich verkaufe Käse. Sag: Ich möchte den Käse.', 'Otto sells cheese.', {
       intent: 'helpful',
     });
     return;
@@ -3227,8 +3234,8 @@ async function handleOttoMarketLine(npc, line) {
   if (hasAccusative) {
     marketQuestState.basket.cheese = true;
     renderDorfbuch();
-    setMarketStatus('Kaese im Korb');
-    await marketSpeak(npc, 'Sehr gut: DEN Kaese. Hier ist ein Stueck Kaese.', 'Correct accusative. Cheese is in the basket.', {
+    setMarketStatus('Käse im Korb');
+    await marketSpeak(npc, 'Sehr gut: DEN Käse. Hier ist ein Stück Käse.', 'Correct accusative. Cheese is in the basket.', {
       intent: 'happy',
     });
     return;
@@ -3240,14 +3247,14 @@ async function handleOttoMarketLine(npc, line) {
     if (marketQuestState.clarifyCounts.otto >= 2) {
       marketQuestState.basket.cheese = true;
       renderDorfbuch();
-      setMarketStatus('Kaese im Korb');
-      await marketSpeak(npc, 'Na gut. Ich helfe: DEN Kaese. Hier ist der Kaese.', 'Second try: Otto recasts and gives the cheese.', {
+      setMarketStatus('Käse im Korb');
+      await marketSpeak(npc, 'Na gut. Ich helfe: DEN Käse. Hier ist der Käse.', 'Second try: Otto recasts and gives the cheese.', {
         intent: 'helpful',
       });
       return;
     }
 
-    await marketSpeak(npc, 'Hm? DEN Kaese? Sag bitte: Ich moechte den Kaese.', 'First B answer: clarification only.', {
+    await marketSpeak(npc, 'Hm? DEN Käse? Sag bitte: Ich möchte den Käse.', 'First B answer: clarification only.', {
       intent: 'thinking',
     });
   }
@@ -3304,7 +3311,7 @@ async function handleRosaMarketLine(npc, line) {
   const color = getMarketTomatoColor(line);
 
   if (!marketWantsTomatoes(text) && !color && !marketTextIncludes(text, ['gemuse', 'gemuese', 'obst'])) {
-    await marketSpeak(npc, 'Ich verkaufe Gemuese und Obst. Welche Tomaten: rot, gruen oder gelb?', 'Rosa asks for a color.', {
+    await marketSpeak(npc, 'Ich verkaufe Gemüse und Obst. Welche Tomaten: rot, grün oder gelb?', 'Rosa asks for a color.', {
       intent: 'helpful',
     });
     return;
@@ -3312,7 +3319,7 @@ async function handleRosaMarketLine(npc, line) {
 
   if (!color) {
     marketQuestState.clarifyCounts.rosa += 1;
-    await marketSpeak(npc, 'Welche denn? Rote Tomaten, gruene Tomaten oder gelbe Tomaten?', 'Choose a tomato color.', {
+    await marketSpeak(npc, 'Welche denn? Rote Tomaten, grüne Tomaten oder gelbe Tomaten?', 'Choose a tomato color.', {
       intent: 'thinking',
     });
     return;
@@ -4339,19 +4346,14 @@ function createBakeryFloor() {
   return floor;
 }
 
-function makeBakeryHotspot(name, position, size, color, action, label, labelOffset = new THREE.Vector3(0, 0.95, 0)) {
+// Invisible click volume only — the floating text signs were dropped so the
+// interior reads clean; the quest dialogue tells the player what to click.
+function makeBakeryHotspot(name, position, size, color, action) {
   const hotspot = makeBakeryBox(name, position, size, color, action);
   hotspot.material.transparent = true;
   hotspot.material.opacity = 0.05;
   hotspot.material.depthWrite = false;
-
-  const sign = createGasthausTextLabel(label, { width: 1.45, height: 0.38, size: 32 });
-  sign.name = `${name}_Label`;
-  sign.position.copy(position).add(labelOffset);
-  sign.rotation.x = -0.12;
-  sign.userData.bakeryAction = action;
-
-  return [hotspot, sign];
+  return hotspot;
 }
 
 function buildBakeryOverlay(root) {
@@ -4364,7 +4366,6 @@ function buildBakeryOverlay(root) {
       new THREE.Vector3(1.15, 1.1, 0.9),
       0x7fb6c8,
       'wash_hands',
-      'Hände',
     ),
     makeBakeryHotspot(
       'Bakery_Flour_Hotspot',
@@ -4372,7 +4373,6 @@ function buildBakeryOverlay(root) {
       new THREE.Vector3(1.25, 1.1, 1.0),
       0xf2e1b9,
       'flour',
-      'Mehl',
     ),
     makeBakeryHotspot(
       'Bakery_Water_Hotspot',
@@ -4380,7 +4380,6 @@ function buildBakeryOverlay(root) {
       new THREE.Vector3(0.9, 1.0, 0.9),
       0x8fbfd9,
       'water',
-      'Wasser',
     ),
     makeBakeryHotspot(
       'Bakery_Dough_Hotspot',
@@ -4388,7 +4387,6 @@ function buildBakeryOverlay(root) {
       new THREE.Vector3(2.5, 1.1, 1.45),
       0xb98551,
       'dough',
-      'Teig',
     ),
     makeBakeryHotspot(
       'Bakery_Oven_Hotspot',
@@ -4396,23 +4394,12 @@ function buildBakeryOverlay(root) {
       new THREE.Vector3(1.55, 1.55, 1.35),
       0x77412f,
       'oven',
-      'Ofen',
     ),
   ];
 
-  for (const pair of hotspots) {
-    root.add(...pair);
+  for (const hotspot of hotspots) {
+    root.add(hotspot);
   }
-
-  const note = createGasthausTextLabel('Zuerst: Hände. Dann: Mehl, Teig, Ofen.', {
-    width: 3.3,
-    height: 0.5,
-    size: 28,
-  });
-  note.position.set(0.6, 1.35, 1.1);
-  note.rotation.x = -0.18;
-  note.userData.bakeryAction = 'note';
-  root.add(note);
 }
 
 function createBakeryNpc(definition, rigged) {
@@ -4460,6 +4447,7 @@ function createBakeryNpc(definition, rigged) {
     voiceId: definition.voiceId || ELEVENLABS_VOICES.antoni,
     location: LOCATION_BAKERY,
     questId: QUEST_BAKERY_ID,
+    targetHeight: BAKERY_NPC_HEIGHT,
     root,
     visual,
     model: visual,
@@ -4683,6 +4671,7 @@ async function enterBakery() {
     await ensureBakeryLoaded();
     setLocation(LOCATION_BAKERY);
     agent.position.copy(BAKERY_PLAYER_SPAWN);
+    agent.eyeHeight = BAKERY_PLAYER_EYE_HEIGHT;
 
     const hans = getBakeryHans();
     lookYaw = hans
@@ -4709,6 +4698,7 @@ async function leaveBakery() {
     setFeaturePanel(dorfbuchPanel, false);
     setLocation(LOCATION_VILLAGE);
     agent.position.copy(snapToNpcGround(BAKERY_RETURN_POINT));
+    agent.eyeHeight = PLAYER_EYE_HEIGHT;
     lookYaw = Math.atan2(BAKERY_DOOR_POINT.x - agent.position.x, BAKERY_DOOR_POINT.z - agent.position.z);
     lookPitch = -0.08;
     agent.yaw = lookYaw;
@@ -4745,6 +4735,12 @@ function clampBakeryPoint(point) {
 
 function clampCurrentInteriorPoint(point) {
   return locationState.current === LOCATION_BAKERY ? clampBakeryPoint(point) : clampGasthausPoint(point);
+}
+
+// Standing camera height for the current location: the bakery is a real-scale
+// interior, everywhere else the player matches the 2.3-unit villagers.
+function standingEyeHeight() {
+  return locationState.current === LOCATION_BAKERY ? BAKERY_PLAYER_EYE_HEIGHT : PLAYER_EYE_HEIGHT;
 }
 
 function moveDirectlyToPoint(point, pendingAction = null, pendingNpcAction = null) {
@@ -4819,7 +4815,7 @@ function findBakeryAction(object) {
 function bakeryActionName(action) {
   return (
     {
-      wash_hands: 'die Haende',
+      wash_hands: 'die Hände',
       flour: 'das Mehl',
       water: 'das Wasser',
       dough: 'den Teig',
@@ -4887,7 +4883,7 @@ async function completeBakeryAction(action) {
     renderDorfbuch();
     renderBakeryChips();
     setBakeryStatus('Mehl holen');
-    await bakerySpeak(npc, 'Gut. Die Haende sind sauber. Kannst du das Mehl holen?', 'Руки чистые. Теперь мука.', {
+    await bakerySpeak(npc, 'Gut. Die Hände sind sauber. Kannst du das Mehl holen?', 'Руки чистые. Теперь мука.', {
       intent: 'happy',
       lesson: 'bakeryFlour',
     });
@@ -6012,8 +6008,9 @@ function fitNpcVisualToGround(npc) {
 
   if (Number.isFinite(height) && height > 0.001) {
     // Overscale slightly for the stylized tavern so counters land around the
-    // torso instead of swallowing the character at neck height.
-    const scale = NPC_TARGET_HEIGHT / height;
+    // torso instead of swallowing the character at neck height. Interiors at
+    // real-life scale (the bakery) set npc.targetHeight to stay human-sized.
+    const scale = (npc.targetHeight || NPC_TARGET_HEIGHT) / height;
     npc.visual.scale.multiplyScalar(scale);
     npc.visual.updateMatrixWorld(true);
   }
@@ -6795,6 +6792,11 @@ function getQuestGuard() {
 function setQuestStatus(message) {
   if (questStatus) {
     questStatus.textContent = message;
+  }
+
+  // Mirror the active quest into the top-left location HUD.
+  if (hudQuestLabel) {
+    hudQuestLabel.textContent = message;
   }
 }
 
@@ -8799,7 +8801,7 @@ function finishArrival(action = null, arrivalPoint = null, npcAction = null) {
     return;
   }
 
-  agent.eyeHeight = PLAYER_EYE_HEIGHT;
+  agent.eyeHeight = standingEyeHeight();
   setStatus(animationCommand ? `Анимация: ${animationCommand.name}` : 'Пришел', 'ready');
 }
 
@@ -9002,7 +9004,7 @@ function updateAgent(deltaTime) {
     return;
   }
 
-  agent.eyeHeight += (PLAYER_EYE_HEIGHT - agent.eyeHeight) * Math.min(deltaTime * 5, 1);
+  agent.eyeHeight += (standingEyeHeight() - agent.eyeHeight) * Math.min(deltaTime * 5, 1);
   toTarget.normalize();
 
   const step = Math.min(distance, agent.speed * deltaTime);
