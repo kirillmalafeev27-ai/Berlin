@@ -100,7 +100,7 @@ const ELEVENLABS_VOICES = {
   bella: 'EXAVITQu4vr4xnSDxMaL',
   antoni: 'ErXwobaYiN019PkySvjV',
   elli: 'MF3mGyEYCl7XYWbV9V6O',
-  josh: 'TxGEqnHWrfWFTfGW9Xj',
+  josh: 'TxGEqnHWrfWFTfGW9Xjo',
   arnold: 'VR6AewLTigWG4xSOukaG',
   adam: 'pNInz6obpgDQGcFmaJgB',
   sam: 'yoZ06aMxZJJ28mfd3POQ',
@@ -135,6 +135,10 @@ const NPC_INTERACTION_DISTANCE = 6;
 const NPC_TALK_STOP_DISTANCE = 4.1;
 const NPC_APPROACH_DISTANCE = 3;
 const NPC_TARGET_HEIGHT = 2.3;
+// The player matches the villagers' height (NPC_TARGET_HEIGHT): eyes sit at
+// ~93% of body height, so the camera meets the NPCs at eye level.
+const PLAYER_EYE_HEIGHT = 2.14;
+const PLAYER_SEATED_EYE_HEIGHT = 1.39;
 const NPC_PATROL_WAIT_MIN = 1.2;
 const NPC_PATROL_WAIT_MAX = 4.8;
 const NPC_PATROL_REPATH_INTERVAL = 0.7;
@@ -825,7 +829,7 @@ let bakeryModel = null;
 const agent = {
   position: new THREE.Vector3(0, 0, 0),
   yaw: 0,
-  eyeHeight: 1.66,
+  eyeHeight: PLAYER_EYE_HEIGHT,
   speed: 3.1,
   path: [],
   pathIndex: 0,
@@ -961,6 +965,17 @@ function applyNpcOverrideToRoot(id, root) {
 
     if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
       root.position.set(x, y, z);
+
+      // Stale overrides may carry a Y saved by older grounding code and leave
+      // the NPC hovering. Keep the tuned X/Z but re-snap the height to the
+      // walkable ground (the same level the player walks on, y=5.02 in the
+      // village). Interior NPCs sit far from the village navmesh horizontally,
+      // so the snap lands elsewhere and is rejected — they keep the stored Y.
+      const snapped = navigation?.snapToNavMesh?.(new THREE.Vector3(x, y, z), { allowFallback: false });
+
+      if (snapped && Math.hypot(snapped.x - x, snapped.z - z) <= 2) {
+        root.position.y = snapped.y;
+      }
     }
   }
 
@@ -1818,6 +1833,15 @@ async function gasthausSpeak(npc, de, ru = '', options = {}) {
 }
 
 function gasthausChipsForStage(stage = gasthausQuest.stage) {
+  // Dorfbuch is filled and the reward is pending: whatever NPC the player
+  // clicked, offer the turn-in phrase so the hand-off to quest 4 can't stall.
+  if (questThreeState.readyForBerta && !questThreeState.bertaRewarded) {
+    return [
+      { label: 'Ich spreche mit Berta', submit: 'Ich spreche mit Berta' },
+      { label: 'Dorfbuch', action: 'open-dorfbuch' },
+    ];
+  }
+
   if (stage === 'greeting') {
     return [
       { label: 'Guten Tag! Ich bin ___', template: 'Guten Tag! Ich bin ___' },
@@ -2129,6 +2153,37 @@ async function sendGasthausDialogueToNpc(npc, message) {
   faceNpcToAgent(npc, 1);
   faceAgentToNpc(npc);
 
+  // "Ich spreche mit Berta" always routes to the innkeeper, no matter which
+  // tavern NPC is selected — clicking near the bar often picks a guest, and
+  // the Dorfbuch turn-in (hand-off to quest 4) must not stall on that.
+  if (/sprech\w*\s+mit\s+(frau\s+)?berta/i.test(line)) {
+    const berta = bertaOrNpc(npc);
+
+    if (await finishQuestThreeWithBerta(berta)) {
+      return;
+    }
+
+    if (questThreeState.bertaRewarded) {
+      await gasthausSpeak(
+        berta,
+        'Du hast den Brief! Geh zum Markt. Finde Hans im Dorfzentrum.',
+        'Письмо уже у тебя! Иди на рынок и найди Hans в центре деревни.',
+        { intent: 'helpful' },
+      );
+      return;
+    }
+
+    if (questThreeState.unlocked && !questThreeState.completed) {
+      await gasthausSpeak(
+        berta,
+        'Erst das Dorfbuch! Sprich mit Hans, Greta und Ida.',
+        'Сначала Dorfbuch! Поговори с Hans, Greta и Ida.',
+        { intent: 'helpful' },
+      );
+      return;
+    }
+  }
+
   // Any tavern guest other than the innkeeper just makes small talk; only Berta
   // drives the room-booking quest below.
   if (npc.id !== 'frau_berta') {
@@ -2149,6 +2204,12 @@ async function sendGasthausDialogueToNpc(npc, message) {
         : 'Nein? Trotzdem: Prost!';
 
     await gasthausSpeak(npc, de, '', { intent: 'happy' });
+    return;
+  }
+
+  // Talking to Berta with a completed Dorfbuch finishes quest 3 regardless of
+  // the exact wording, mirroring the click-to-talk flow.
+  if (await finishQuestThreeWithBerta(npc)) {
     return;
   }
 
@@ -4576,7 +4637,11 @@ async function enterGasthaus() {
       : Math.PI;
     agent.yaw = lookYaw;
     lookPitch = -0.05;
-    gasthausSetStatus('познакомьтесь с Frau Berta');
+    gasthausSetStatus(
+      questThreeState.readyForBerta && !questThreeState.bertaRewarded
+        ? 'скажите: Ich spreche mit Berta'
+        : 'познакомьтесь с Frau Berta',
+    );
     renderGasthausChips();
   });
 
@@ -5666,9 +5731,9 @@ function makeNpcSlot(index, url) {
       id: QUEST_GUARD_ID,
       label: QUEST_GUARD_LABEL,
       role: 'Bruno, the friendly and calm gate guard of Grünbach village',
-      // Calm, warm voice (not the loud Arnold) so he doesn't come across as
-      // shouting.
-      voiceId: ELEVENLABS_VOICES.adam,
+      // Deep, authoritative voice no other NPC uses, so the Wachmann is
+      // clearly distinct from Bäcker Hans (antoni) and the villagers.
+      voiceId: ELEVENLABS_VOICES.arnold,
       idleKeywords: ['idle default beliner', 'idle default', 'standing idle'],
       aliases: [QUEST_GUARD_LABEL, 'bruno', 'guard', 'wachmann', 'wache', 'стражник', 'охранник'],
       homeTargetIds: [],
@@ -7565,6 +7630,9 @@ function openDialogueWithNpc(npc, options = {}) {
 
     setSelectedNpc(npc, options);
     renderQuestChips([
+      ...(questThreeState.readyForBerta && !questThreeState.bertaRewarded
+        ? [{ label: 'Ich spreche mit Berta', submit: 'Ich spreche mit Berta' }]
+        : []),
       { label: 'Ja', submit: 'Ja' },
       { label: 'Nein', submit: 'Nein' },
       { label: 'Prost!', submit: 'Prost!' },
@@ -8508,7 +8576,7 @@ function setFlyMode(enabled) {
       agent.position.copy(snapped);
     }
 
-    agent.eyeHeight = 1.66;
+    agent.eyeHeight = PLAYER_EYE_HEIGHT;
     setStatus('Fly mode off', 'ready');
   }
 
@@ -8642,7 +8710,7 @@ function setInitialAgentPosition() {
     agent.pendingAction = null;
     agent.pendingNpcAction = null;
     agent.pendingArrivalPoint = null;
-    agent.eyeHeight = 1.66;
+    agent.eyeHeight = PLAYER_EYE_HEIGHT;
     lookYaw = Math.atan2(QUEST_POINTS.guard.x - agent.position.x, QUEST_POINTS.guard.z - agent.position.z);
     lookPitch = -0.08;
     agent.yaw = lookYaw;
@@ -8726,12 +8794,12 @@ function finishArrival(action = null, arrivalPoint = null, npcAction = null) {
   }
 
   if (isSitAction) {
-    agent.eyeHeight = 1.08;
+    agent.eyeHeight = PLAYER_SEATED_EYE_HEIGHT;
     setStatus('Сел на Stuhl', 'ready');
     return;
   }
 
-  agent.eyeHeight = 1.66;
+  agent.eyeHeight = PLAYER_EYE_HEIGHT;
   setStatus(animationCommand ? `Анимация: ${animationCommand.name}` : 'Пришел', 'ready');
 }
 
@@ -8934,7 +9002,7 @@ function updateAgent(deltaTime) {
     return;
   }
 
-  agent.eyeHeight += (1.66 - agent.eyeHeight) * Math.min(deltaTime * 5, 1);
+  agent.eyeHeight += (PLAYER_EYE_HEIGHT - agent.eyeHeight) * Math.min(deltaTime * 5, 1);
   toTarget.normalize();
 
   const step = Math.min(distance, agent.speed * deltaTime);
