@@ -72,10 +72,9 @@ const mimeTypes = new Map([
 
 // Stable URL prefix the game uses for character/animation GLBs. The real files
 // may sit under ./Mixamo (legacy layout) or ./public/assets/mixamo (committed
-// layout); we resolve whichever base exists and alias its whole tree — so both
-// /Mixamo/glb/<clip> (body animations) and /Mixamo/characters/<model> (rigged
-// characters) resolve.
-const MIXAMO_URL_PREFIX = '/Mixamo/';
+// layout); we resolve whichever base exists and alias its whole tree so both
+// /assets/mixamo/glb/<clip> and /assets/mixamo/characters/<model> resolve.
+const MIXAMO_URL_PREFIX = '/assets/mixamo/';
 const MIXAMO_BASE_CANDIDATES = ['Mixamo', 'public/assets/mixamo'];
 
 function firstExistingDir(candidates) {
@@ -139,8 +138,9 @@ function assetUrl(relativePath) {
   return `/${relativePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')}`;
 }
 
-// Expose a mixamo file under the stable /Mixamo/<subpath> alias, preserving the
-// glb/ vs characters/ subdirectory regardless of where the base lives on disk.
+// Expose a mixamo file under the stable /assets/mixamo/<subpath> URL,
+// preserving the glb/ vs characters/ subdirectory regardless of where the base
+// lives on disk.
 function mixamoAssetUrl(relativePath) {
   const normalized = relativePath.replace(/\\/g, '/');
   const base = mixamoBaseDir.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -169,7 +169,7 @@ function resolveStaticFile(pathname) {
   return null;
 }
 
-// Serve the stable /Mixamo/<subpath> alias from whichever real base exists.
+// Serve the stable /assets/mixamo/<subpath> alias from whichever real base exists.
 function resolveMixamoFile(pathname) {
   const sub = decodeURIComponent(pathname.slice(MIXAMO_URL_PREFIX.length));
   const dir = path.resolve(root, mixamoBaseDir);
@@ -561,12 +561,23 @@ function cleanTextForSpeech(text) {
     .trim();
 }
 
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, number));
+}
+
 async function handleTts(request, response) {
   try {
     const input = await readJsonBody(request);
     const text = cleanTextForSpeech(input.text);
     const config = getElevenLabsConfig();
     const voiceId = input.voice_id || config.voiceId;
+    const speed = clampNumber(input.speed ?? process.env.ELEVENLABS_SPEED, 1, 0.7, 1.2);
 
     if (!text) {
       sendJson(response, 400, { error: 'TTS text is empty' });
@@ -599,6 +610,7 @@ async function handleTts(request, response) {
           similarity_boost: Number(process.env.ELEVENLABS_SIMILARITY_BOOST || 0.75),
           style: Number(process.env.ELEVENLABS_STYLE || 0),
           use_speaker_boost: process.env.ELEVENLABS_SPEAKER_BOOST !== 'false',
+          speed,
         },
       })),
     });
