@@ -4,6 +4,7 @@ const OPEN_CHARS = new Set('aeiouy');
 const CYRILLIC_CLOSED = new Set(['\u043c', '\u0431', '\u043f']);
 const CYRILLIC_ROUND = new Set(['\u043e', '\u0443', '\u044e']);
 const CYRILLIC_OPEN = new Set(['\u0430', '\u044d', '\u0435', '\u0451', '\u0438', '\u044b', '\u044f']);
+const A1_SPEECH_RATE = 0.74;
 
 function normalizeMorphName(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -85,6 +86,51 @@ function alignmentDuration(track) {
   return Math.max(0, ...track.map((segment) => segment.t1));
 }
 
+function normalizeSpeechRate(rate) {
+  const value = Number(rate);
+
+  if (!Number.isFinite(value)) {
+    return A1_SPEECH_RATE;
+  }
+
+  return Math.min(1, Math.max(0.55, value));
+}
+
+function stretchTrack(track, factor) {
+  if (!Array.isArray(track) || factor === 1) {
+    return track;
+  }
+
+  return track.map((segment) => ({
+    ...segment,
+    t0: segment.t0 * factor,
+    t1: segment.t1 * factor,
+  }));
+}
+
+function chooseBrowserSpeechVoice(lang = 'de-DE') {
+  const synth = window.speechSynthesis;
+  const voices = synth?.getVoices?.() || [];
+  const normalizedLang = String(lang || '').toLowerCase();
+  const languageFamily = normalizedLang.split(/[-_]/)[0];
+  const languageMatcher = new RegExp(`^${languageFamily}(?:[-_]|$)`, 'i');
+  const nameMatcher =
+    languageFamily === 'ru'
+      ? /russian|рус/i
+      : languageFamily === 'de'
+      ? /german|deutsch/i
+      : null;
+
+  return (
+    voices.find((voice) => String(voice.lang || '').toLowerCase() === normalizedLang) ||
+    voices.find((voice) => languageMatcher.test(voice.lang || '')) ||
+    (nameMatcher ? voices.find((voice) => nameMatcher.test(voice.name || '')) : null) ||
+    voices.find((voice) => /^de[-_]/i.test(voice.lang || '')) ||
+    voices.find((voice) => /german|deutsch/i.test(voice.name || '')) ||
+    null
+  );
+}
+
 function base64ToArrayBuffer(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -120,6 +166,7 @@ export class TextLipSync {
     this.analyser = null;
     this.data = null;
     this.elementSources = new WeakMap();
+    this.browserUtterance = null;
 
     this.refreshTargets(root);
   }
@@ -219,7 +266,12 @@ export class TextLipSync {
       this.audio.src = '';
     }
 
+    if (this.browserUtterance && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
     this.audio = null;
+    this.browserUtterance = null;
     this.active = false;
     this.track = null;
     this.duration = 0;
@@ -230,8 +282,8 @@ export class TextLipSync {
     this.stop();
 
     if (options.requireUnlocked !== false && !TextLipSync.isAudioUnlocked()) {
-      console.warn('TTS request skipped until browser audio is unlocked.');
-      return this.speakFromText(text);
+      console.warn('TTS request skipped until browser audio is unlocked; using browser speech fallback.');
+      return this.speakFromBrowserVoice(text, options);
     }
 
     try {
@@ -250,29 +302,33 @@ export class TextLipSync {
 
       const payload = await response.json();
       const audioBuffer = base64ToArrayBuffer(payload.audio_base64);
-      return await this.playAligned(audioBuffer, payload.alignment, text, payload.output_format);
+      return await this.playAligned(audioBuffer, payload.alignment, text, payload.output_format, options);
     } catch (error) {
-      console.warn('TTS unavailable, falling back to silent aligned mouth track:', error);
-      return this.speakFromText(text);
+      console.warn('TTS unavailable, using browser speech fallback:', error);
+      return this.speakFromBrowserVoice(text, options);
     }
   }
 
-  async playAligned(audioBuffer, alignment, text = '', outputFormat = '') {
+  async playAligned(audioBuffer, alignment, text = '', outputFormat = '', options = {}) {
     await this.resumeAudio();
 
     const mime = outputFormat?.includes('pcm') ? 'audio/wav' : 'audio/mpeg';
     const blobUrl = URL.createObjectURL(new Blob([audioBuffer], { type: mime }));
     const audio = new Audio(blobUrl);
     const track = makeAlignmentTrack(alignment, text) || makeTextTrack(text, estimateDuration(text));
-    const duration = alignmentDuration(track) || estimateDuration(text);
+    const speechRate = normalizeSpeechRate(options.rate ?? options.playbackRate);
+    const timeScale = 1 / speechRate;
+    const slowedTrack = stretchTrack(track, timeScale);
+    const duration = (alignmentDuration(slowedTrack) || estimateDuration(text) * timeScale);
 
     audio.preload = 'auto';
-    audio.volume = 1;
+    audio.playbackRate = speechRate;
+    audio.volume = options.volume ?? 0.82;
     audio.muted = false;
     audio.playsInline = true;
     this.connectAudioElement(audio);
     this.audio = audio;
-    this.track = track;
+    this.track = slowedTrack;
     this.duration = duration;
     this.active = true;
     this.startedAt = performance.now() / 1000;
@@ -300,11 +356,60 @@ export class TextLipSync {
   }
 
   speakFromText(text) {
-    const duration = estimateDuration(text);
+    const duration = estimateDuration(text) / A1_SPEECH_RATE;
     this.track = makeTextTrack(text, duration);
     this.duration = duration;
     this.startedAt = performance.now() / 1000;
     this.active = true;
+    return duration;
+  }
+
+  speakFromBrowserVoice(text, options = {}) {
+    const speechRate = normalizeSpeechRate(options.rate);
+    const duration = estimateDuration(text) / speechRate;
+    this.track = makeTextTrack(text, duration);
+    this.duration = duration;
+    this.startedAt = performance.now() / 1000;
+    this.active = true;
+
+    const synth = window.speechSynthesis;
+    const Utterance = window.SpeechSynthesisUtterance;
+
+    if (!synth || !Utterance) {
+      return duration;
+    }
+
+    try {
+      synth.cancel();
+      const utterance = new Utterance(String(text || ''));
+      utterance.lang = options.lang || 'de-DE';
+      utterance.rate = speechRate;
+      utterance.pitch = options.pitch ?? 1;
+      utterance.volume = options.volume ?? 0.86;
+      const voice = chooseBrowserSpeechVoice(utterance.lang);
+
+      if (voice) {
+        utterance.voice = voice;
+      }
+
+      utterance.onend = () => {
+        if (this.browserUtterance === utterance) {
+          this.active = false;
+          this.browserUtterance = null;
+        }
+      };
+      utterance.onerror = () => {
+        if (this.browserUtterance === utterance) {
+          this.active = false;
+          this.browserUtterance = null;
+        }
+      };
+      this.browserUtterance = utterance;
+      synth.speak(utterance);
+    } catch (error) {
+      console.warn('Browser speech fallback failed:', error);
+    }
+
     return duration;
   }
 

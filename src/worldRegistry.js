@@ -327,6 +327,13 @@ export class WorldRegistry {
 
   bindNavigation(navigation) {
     for (const target of this.targets) {
+      if (target.isPointTarget && target.approachPoint) {
+        const routePoint = navigation.snapToNavMesh(target.approachPoint) || target.approachPoint.clone();
+        target.routePoint = routePoint;
+        target.approachPoint = routePoint.clone();
+        continue;
+      }
+
       const candidates = createApproachCandidates(target);
       const routePoint = navigation.findBestReachablePoint(candidates, target.center);
       target.routePoint = routePoint;
