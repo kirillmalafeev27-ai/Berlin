@@ -35,6 +35,7 @@
         </div>
         <div class="location-actions">
           <button id="dorfbuch-open" type="button">Dorfbuch</button>
+          <button id="lesson-open" type="button" class="lesson-open" title="Грамматика и объяснения">Erklärung</button>
           <button id="wallet-open" type="button">Münzen</button>
           <button id="npc-tool-open" type="button" title="Редактор позиций персонажей">NPC</button>
           <button id="exit-location" type="button" hidden>Выйти в деревню</button>
@@ -137,6 +138,17 @@
           <button id="dorfbuch-close" type="button" title="Закрыть">x</button>
         </div>
         <div id="dorfbuch-content" class="dorfbuch-content"></div>
+      </section>
+
+      <section id="lesson-panel" class="panel feature-panel lesson-panel" aria-label="Erklärung" hidden>
+        <div class="feature-header">
+          <div>
+            <div class="panel-title inline-title">Erklärung</div>
+            <p>Правила, таблицы и примеры. Как мини-PDF внутри игры.</p>
+          </div>
+          <button id="lesson-close" type="button" title="Закрыть">x</button>
+        </div>
+        <div id="lesson-content" class="lesson-content"></div>
       </section>
 
       <section id="wallet-panel" class="panel feature-panel wallet-panel" aria-label="Coin wallet" hidden>

@@ -399,13 +399,13 @@ function localReplyFor({ npc, message }) {
       talk: `\u0421\u043b\u044b\u0448\u0443 \u0442\u0435\u0431\u044f. \u0414\u0430\u0432\u0430\u0439 \u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c \u043f\u0440\u043e\u0449\u0435 \u0438 \u043f\u043e \u0434\u0435\u043b\u0443.`,
     },
     de: {
-      greeting: `Hallo. Ich bleibe in der Naehe, falls du eine schnelle Orientierung brauchst.`,
+      greeting: `Hallo. Ich bleibe in der Nähe, falls du eine schnelle Orientierung brauchst.`,
       thinking: `Einen Moment. Am besten bleibst du auf dem Gehweg und gehst Richtung offener Platz.`,
       thankful: `Gern. Sprich mich wieder an, wenn du noch etwas brauchst.`,
-      negative: `Nein, das wuerde ich nicht machen. Nimm lieber den ruhigeren Weg.`,
+      negative: `Nein, das würde ich nicht machen. Nimm lieber den ruhigeren Weg.`,
       happy: `Ha, das ist gut. So klingt die Stadt gleich freundlicher.`,
       helpful: `Ich helfe dir. Frag kurz, und ich zeige dir die Richtung.`,
-      talk: `Ich hoere dir zu. Sag mir kurz, was du wissen willst.`,
+      talk: `Ich höre dir zu. Sag mir kurz, was du wissen willst.`,
     },
     en: {
       greeting: `Hello. I am nearby if you need quick city guidance.`,
@@ -420,6 +420,7 @@ function localReplyFor({ npc, message }) {
 
   return {
     reply: replies[language][intent] || replies.en.talk,
+    ru: 'Я рядом и отвечу простым немецким.',
     animationIntent: intent,
     animationKeywords: animationKeywordsForIntent(intent),
     source: 'local',
@@ -434,6 +435,7 @@ function normalizeDialoguePayload(payload, fallback) {
 
   return {
     reply: String(payload?.reply || fallback?.reply || ''),
+    ru: String(payload?.ru || payload?.translation_ru || payload?.translationRu || fallback?.ru || ''),
     animationIntent: intent,
     animationKeywords: keywords.map(String),
     source: payload?.source || fallback?.source || 'local',
@@ -486,7 +488,8 @@ async function callRemoteDialogue(input, fallback) {
     'Be warm, calm and encouraging. Never shout and never use ALL CAPS or many exclamation marks.',
     'You may gently correct the player in one short clause, then answer their question.',
     'Keep it small and everyday; do not invent a big plot or leave the village.',
-    'Return only JSON with fields: reply, animationIntent, animationKeywords.',
+    'Return only JSON with fields: reply, ru, animationIntent, animationKeywords.',
+    'The ru field must be a natural Russian translation of reply. Keep it short and faithful.',
     'Do not prefix the reply with the NPC name.',
     'animationKeywords must be 1-3 calm Mixamo hints like talking at watercooler, thinking, waving, standing greeting, pointing forward, acknowledging, thankful.',
   ].join(' ');
