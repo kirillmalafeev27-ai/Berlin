@@ -6,6 +6,15 @@ const CYRILLIC_ROUND = new Set(['\u043e', '\u0443', '\u044e']);
 const CYRILLIC_OPEN = new Set(['\u0430', '\u044d', '\u0435', '\u0451', '\u0438', '\u044b', '\u044f']);
 const A1_SPEECH_RATE = 0.74;
 
+// NPC lines are displayed with emoji hints after object nouns; strip them from
+// anything sent to TTS or the browser voice so they are never read aloud.
+function stripPictographs(text) {
+  return String(text || '')
+    .replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function normalizeMorphName(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
@@ -279,6 +288,8 @@ export class TextLipSync {
   }
 
   async speak(text, options = {}) {
+    // Displayed lines may carry emoji hints after nouns; never read them aloud.
+    text = stripPictographs(text);
     this.stop();
 
     if (options.requireUnlocked !== false && !TextLipSync.isAudioUnlocked()) {
@@ -365,6 +376,7 @@ export class TextLipSync {
   }
 
   speakFromBrowserVoice(text, options = {}) {
+    text = stripPictographs(text);
     const speechRate = normalizeSpeechRate(options.rate);
     const duration = estimateDuration(text) / speechRate;
     this.track = makeTextTrack(text, duration);

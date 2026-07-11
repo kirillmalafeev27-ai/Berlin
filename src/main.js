@@ -428,6 +428,56 @@ const GERMAN_NUMBERS = [
   'neunzehn',
   'zwanzig',
 ];
+// Concrete-object nouns get an emoji hint right after the word in displayed
+// NPC lines, so a beginner instantly sees what the German noun means. Applied
+// only at display time — TTS strips pictographs (see lipsync.js). Longer
+// forms come first inside an alternation so plurals win over singulars.
+const GERMAN_NOUN_EMOJI = [
+  ['Käse', '🧀'],
+  ['Eiern|Eier|Ei', '🥚'],
+  ['Milch', '🥛'],
+  ['Tomaten|Tomate', '🍅'],
+  ['Brötchen', '🥐'],
+  ['Brot', '🍞'],
+  ['Mehl', '🌾'],
+  ['Wasser', '💧'],
+  ['Teig', '🥣'],
+  ['Ofen', '🔥'],
+  ['Händen|Hände', '🧼'],
+  ['Zimmer', '🛏️'],
+  ['Türen|Tür', '🚪'],
+  ['Schlüssel', '🔑'],
+  ['Münzen|Münze', '🪙'],
+  ['Geld', '💰'],
+  ['Brief', '✉️'],
+  ['Dorfbuch', '📖'],
+  ['Einkaufsliste|Liste', '📝'],
+  ['Korb', '🧺'],
+  ['Markt', '🛒'],
+  ['Bäckerei', '🥖'],
+  ['Gasthaus', '🏠'],
+  ['Gemüse', '🥦'],
+  ['Obst', '🍎'],
+  ['Schule', '🏫'],
+  ['Bier', '🍺'],
+  ['Suppe', '🍲'],
+  ['Nacht', '🌙'],
+].map(([words, emoji]) => [
+  // Negative lookahead keeps the decorator idempotent when a line is re-shown.
+  new RegExp(`\\b(?:${words})\\b(?!\\s*\\p{Extended_Pictographic})`, 'gu'),
+  emoji,
+]);
+
+function decorateGermanNouns(text) {
+  let out = String(text || '');
+
+  for (const [pattern, emoji] of GERMAN_NOUN_EMOJI) {
+    out = out.replace(pattern, (match) => `${match} ${emoji}`);
+  }
+
+  return out;
+}
+
 const QUEST_GUARD_IDLE_URL = '/Mixamo/glb/Idle%20Default%20beliner.glb';
 // Used only when the asset manifest reports no rigged characters. This is still
 // a real GLB from /Mixamo/characters, never a generated stand-in.
@@ -2991,14 +3041,6 @@ async function openBakeryDialogue(npc = getBakeryHans()) {
   await showBakeryHelp(npc);
 }
 
-function setBakeryPendingAction(stage, action, status) {
-  bakeryQuestState.stage = stage;
-  bakeryQuestState.pendingAction = action;
-  setBakeryStatus(status);
-  renderBakeryChips();
-  renderDorfbuch();
-}
-
 async function sendBakeryDialogueToNpc(npc, message) {
   const line = String(message || '').trim();
 
@@ -3034,10 +3076,17 @@ async function sendBakeryDialogueToNpc(npc, message) {
 
   if (bakeryQuestState.stage === 'wash_phrase') {
     if (bakeryHasCorrectModal(line, 'muss', /(?:die )?haende|(?:die )?hande/, 'waschen')) {
-      setBakeryPendingAction('wash_action', 'wash_hands', 'klicke auf die Hände');
-      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Klick die Hände.', 'Верно. Теперь кликни умывальник.', {
-        intent: 'happy',
-      });
+      bakeryQuestState.steps.washHands = true;
+      bakeryQuestState.stage = 'flour_phrase';
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('Mehl holen');
+      await bakerySpeak(
+        npc,
+        'Ja! Verb am Ende - gut. Die Hände sind sauber. Kannst du das Mehl holen?',
+        'Верно! Руки чистые. Теперь скажи фразу про муку.',
+        { intent: 'happy', lesson: 'bakeryFlour' },
+      );
       return;
     }
 
@@ -3052,10 +3101,17 @@ async function sendBakeryDialogueToNpc(npc, message) {
       bakeryHasCorrectModal(line, 'kann', /(?:das )?mehl/, 'holen') ||
       bakeryHasCorrectModal(line, 'muss', /(?:das )?mehl/, 'holen')
     ) {
-      setBakeryPendingAction('flour_action', 'flour', 'hole das Mehl');
-      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Hol das Mehl.', 'Верно. Кликни муку.', {
-        intent: 'happy',
-      });
+      bakeryQuestState.steps.flour = true;
+      bakeryQuestState.stage = 'water_phrase';
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('Wasser bringen');
+      await bakerySpeak(
+        npc,
+        'Ja! Verb am Ende - gut. Das Mehl ist da. Jetzt brauchen wir Wasser. Was musst du bringen?',
+        'Верно! Мука есть. Теперь скажи фразу про воду.',
+        { intent: 'happy', lesson: 'bakeryWater' },
+      );
       return;
     }
 
@@ -3067,10 +3123,17 @@ async function sendBakeryDialogueToNpc(npc, message) {
 
   if (bakeryQuestState.stage === 'water_phrase') {
     if (bakeryHasCorrectModal(line, 'muss', /(?:das )?wasser/, 'bringen')) {
-      setBakeryPendingAction('water_action', 'water', 'bringe das Wasser');
-      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Bring das Wasser.', 'Верно. Кликни воду.', {
-        intent: 'happy',
-      });
+      bakeryQuestState.steps.water = true;
+      bakeryQuestState.stage = 'permission';
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('frage: Darf ich?');
+      await bakerySpeak(
+        npc,
+        'Ja! Verb am Ende - gut. Mehl und Wasser sind da. Willst du den Teig kneten? Frag zuerst: Darf ich?',
+        'Верно! Перед тестом спроси разрешение.',
+        { intent: 'happy', lesson: 'bakeryPermission' },
+      );
       return;
     }
 
@@ -3104,10 +3167,18 @@ async function sendBakeryDialogueToNpc(npc, message) {
 
   if (bakeryQuestState.stage === 'dough_phrase') {
     if (bakeryHasCorrectModal(line, 'muss', /(?:den|das)?\s*teig/, 'kneten')) {
-      setBakeryPendingAction('dough_action', 'dough', 'knete den Teig');
-      await bakerySpeak(npc, 'Ja! Verb am Ende - gut. Knete den Teig.', 'Верно. Кликни тесто.', {
-        intent: 'happy',
-      });
+      bakeryQuestState.steps.dough = true;
+      bakeryQuestState.stage = 'free_sequence';
+      bakeryQuestState.finalSequenceSpoken = false;
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('sag drei Sätze');
+      await bakerySpeak(
+        npc,
+        'Ja! Gut geknetet. Jetzt ohne Chips. Sag drei Sätze: Ich muss das Mehl holen. Ich muss den Teig kneten. Ich will Brot backen.',
+        'Верно! Финал без подсказок: скажи три предложения подряд или по одному.',
+        { intent: 'happy', lesson: 'bakeryFinal' },
+      );
       return;
     }
 
@@ -3121,18 +3192,21 @@ async function sendBakeryDialogueToNpc(npc, message) {
     const final = parseBakeryFinalSequence(line);
 
     if (final.complete) {
-      bakeryQuestState.finalSequenceSpoken = true;
-      setBakeryPendingAction('order_flour_action', 'flour', 'zuerst Mehl');
-      await bakerySpeak(npc, 'Sehr gut! Verb am Ende. Zuerst: Hol das Mehl.', 'Вся последовательность верная. Кликни муку.', {
-        intent: 'happy',
-      });
+      bakeryQuestState.steps.orderFlour = true;
+      bakeryQuestState.steps.orderDough = true;
+      await completeBakeryQuest(npc);
       return;
     }
 
     if (final.flourOnly) {
-      bakeryQuestState.finalSequenceSpoken = false;
-      setBakeryPendingAction('order_flour_action', 'flour', 'zuerst Mehl');
-      await bakerySpeak(npc, 'Ja. Zuerst: Hol das Mehl.', 'Кликни муку.', { intent: 'happy' });
+      bakeryQuestState.steps.orderFlour = true;
+      bakeryQuestState.stage = 'order_dough_phrase';
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('dann: der Teig');
+      await bakerySpeak(npc, 'Ja, zuerst das Mehl. Dann? Sag den nächsten Satz.', 'Верно. Скажи следующий шаг.', {
+        intent: 'happy',
+      });
       return;
     }
 
@@ -3146,8 +3220,14 @@ async function sendBakeryDialogueToNpc(npc, message) {
     const final = parseBakeryFinalSequence(line);
 
     if (final.doughOnly) {
-      setBakeryPendingAction('order_dough_action', 'dough', 'dann Teig');
-      await bakerySpeak(npc, 'Gut. Dann: Knete den Teig.', 'Теперь кликни тесто.', { intent: 'happy' });
+      bakeryQuestState.steps.orderDough = true;
+      bakeryQuestState.stage = 'bake_phrase';
+      renderDorfbuch();
+      renderBakeryChips();
+      setBakeryStatus('zuletzt: das Brot');
+      await bakerySpeak(npc, 'Gut, dann den Teig. Und jetzt? Sag den letzten Satz.', 'Верно. Скажи последний шаг.', {
+        intent: 'happy',
+      });
       return;
     }
 
@@ -3161,8 +3241,7 @@ async function sendBakeryDialogueToNpc(npc, message) {
     const final = parseBakeryFinalSequence(line);
 
     if (final.breadOnly || bakeryHasCorrectModal(line, 'will', /(?:das )?brot/, 'backen')) {
-      setBakeryPendingAction('bake_action', 'oven', 'backe Brot');
-      await bakerySpeak(npc, 'Ja. Jetzt: Brot backen. Klick den Ofen.', 'Кликни печь.', { intent: 'happy' });
+      await completeBakeryQuest(npc);
       return;
     }
 
@@ -4267,7 +4346,7 @@ async function ensureGasthausLoaded() {
   locationState.gasthausLoaded = true;
 }
 
-function makeBakeryBox(name, position, size, color, action = '') {
+function makeBakeryBox(name, position, size, color) {
   const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
   const material = new THREE.MeshStandardMaterial({
     color,
@@ -4277,11 +4356,6 @@ function makeBakeryBox(name, position, size, color, action = '') {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;
   mesh.position.copy(position);
-
-  if (action) {
-    mesh.userData.bakeryAction = action;
-  }
-
   return mesh;
 }
 
@@ -4346,60 +4420,8 @@ function createBakeryFloor() {
   return floor;
 }
 
-// Invisible click volume only — the floating text signs were dropped so the
-// interior reads clean; the quest dialogue tells the player what to click.
-function makeBakeryHotspot(name, position, size, color, action) {
-  const hotspot = makeBakeryBox(name, position, size, color, action);
-  hotspot.material.transparent = true;
-  hotspot.material.opacity = 0.05;
-  hotspot.material.depthWrite = false;
-  return hotspot;
-}
-
 function buildBakeryOverlay(root) {
   root.add(createBakeryFloor());
-
-  const hotspots = [
-    makeBakeryHotspot(
-      'Bakery_Sink_Hotspot',
-      new THREE.Vector3(-3.35, 0.65, 2.15),
-      new THREE.Vector3(1.15, 1.1, 0.9),
-      0x7fb6c8,
-      'wash_hands',
-    ),
-    makeBakeryHotspot(
-      'Bakery_Flour_Hotspot',
-      new THREE.Vector3(-3.25, 0.55, -2.25),
-      new THREE.Vector3(1.25, 1.1, 1.0),
-      0xf2e1b9,
-      'flour',
-    ),
-    makeBakeryHotspot(
-      'Bakery_Water_Hotspot',
-      new THREE.Vector3(-2.4, 0.55, 2.15),
-      new THREE.Vector3(0.9, 1.0, 0.9),
-      0x8fbfd9,
-      'water',
-    ),
-    makeBakeryHotspot(
-      'Bakery_Dough_Hotspot',
-      new THREE.Vector3(0.05, 0.75, 0.0),
-      new THREE.Vector3(2.5, 1.1, 1.45),
-      0xb98551,
-      'dough',
-    ),
-    makeBakeryHotspot(
-      'Bakery_Oven_Hotspot',
-      new THREE.Vector3(3.25, 0.85, -1.8),
-      new THREE.Vector3(1.55, 1.55, 1.35),
-      0x77412f,
-      'oven',
-    ),
-  ];
-
-  for (const hotspot of hotspots) {
-    root.add(hotspot);
-  }
 }
 
 function createBakeryNpc(definition, rigged) {
@@ -4798,32 +4820,6 @@ function handleGasthausAction(action) {
   return false;
 }
 
-function findBakeryAction(object) {
-  let current = object;
-
-  while (current) {
-    if (current.userData?.bakeryAction) {
-      return current.userData.bakeryAction;
-    }
-
-    current = current.parent;
-  }
-
-  return '';
-}
-
-function bakeryActionName(action) {
-  return (
-    {
-      wash_hands: 'die Hände',
-      flour: 'das Mehl',
-      water: 'das Wasser',
-      dough: 'den Teig',
-      oven: 'den Ofen',
-    }[action] || action
-  );
-}
-
 async function completeBakeryQuest(npc = getBakeryHans()) {
   bakeryQuestState.completed = true;
   bakeryQuestState.active = false;
@@ -4843,147 +4839,6 @@ async function completeBakeryQuest(npc = getBakeryHans()) {
     { intent: 'happy' },
   );
   showSceneHint('Quest 05 fertig: Du darfst in der Bäckerei arbeiten.', 9000);
-}
-
-async function completeBakeryAction(action) {
-  const npc = getBakeryHans();
-
-  if (!bakeryQuestState.pendingAction) {
-    if (action === 'note') {
-      await showBakeryHelp(npc);
-      return true;
-    }
-
-    if (action === 'dough' && !bakeryQuestState.steps.permission) {
-      await bakerySpeak(npc, 'Halt! Fragen! Sag: Darf ich?', 'Сначала спроси разрешение.', {
-        intent: 'thinking',
-        lesson: 'bakeryPermission',
-      });
-      return true;
-    }
-
-    await bakerySpeak(npc, 'Sprich zuerst. Dann arbeiten.', 'Сначала скажи фразу Hans.', {
-      intent: 'helpful',
-    });
-    return true;
-  }
-
-  if (action !== bakeryQuestState.pendingAction) {
-    await bakerySpeak(npc, `Noch nicht. Erst: ${bakeryActionName(bakeryQuestState.pendingAction)}.`, 'Не тот объект.', {
-      intent: 'thinking',
-    });
-    return true;
-  }
-
-  bakeryQuestState.pendingAction = '';
-
-  if (bakeryQuestState.stage === 'wash_action') {
-    bakeryQuestState.steps.washHands = true;
-    bakeryQuestState.stage = 'flour_phrase';
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('Mehl holen');
-    await bakerySpeak(npc, 'Gut. Die Hände sind sauber. Kannst du das Mehl holen?', 'Руки чистые. Теперь мука.', {
-      intent: 'happy',
-      lesson: 'bakeryFlour',
-    });
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'flour_action') {
-    bakeryQuestState.steps.flour = true;
-    bakeryQuestState.stage = 'water_phrase';
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('Wasser bringen');
-    await bakerySpeak(npc, 'Sehr gut. Jetzt brauchen wir Wasser. Was musst du bringen?', 'Теперь нужна вода.', {
-      intent: 'helpful',
-      lesson: 'bakeryWater',
-    });
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'water_action') {
-    bakeryQuestState.steps.water = true;
-    bakeryQuestState.stage = 'permission';
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('frage: Darf ich?');
-    await bakerySpeak(npc, 'Gut. Mehl und Wasser sind da. Willst du den Teig kneten? Frag zuerst: Darf ich?', 'Перед тестом спроси разрешение.', {
-      intent: 'helpful',
-      lesson: 'bakeryPermission',
-    });
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'dough_action') {
-    bakeryQuestState.steps.dough = true;
-    bakeryQuestState.stage = 'free_sequence';
-    bakeryQuestState.finalSequenceSpoken = false;
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('freie Reihenfolge');
-    await bakerySpeak(
-      npc,
-      'Gut geknetet. Jetzt ohne Chips. Sag drei Saetze: Ich muss das Mehl holen. Ich muss den Teig kneten. Ich will Brot backen.',
-      'Финал без chips: скажи три предложения.',
-      { intent: 'helpful', lesson: 'bakeryFinal' },
-    );
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'order_flour_action') {
-    bakeryQuestState.steps.orderFlour = true;
-
-    if (bakeryQuestState.finalSequenceSpoken) {
-      setBakeryPendingAction('order_dough_action', 'dough', 'dann Teig');
-      await bakerySpeak(npc, 'Dann: Knete den Teig.', 'Теперь кликни тесто.', { intent: 'helpful' });
-      return true;
-    }
-
-    bakeryQuestState.stage = 'order_dough_phrase';
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('dann Teig');
-    await bakerySpeak(npc, 'Dann? Sag den naechsten Satz.', 'Скажи следующий шаг.', { intent: 'helpful' });
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'order_dough_action') {
-    bakeryQuestState.steps.orderDough = true;
-
-    if (bakeryQuestState.finalSequenceSpoken) {
-      setBakeryPendingAction('bake_action', 'oven', 'Brot backen');
-      await bakerySpeak(npc, 'Dann: Brot backen. Klick den Ofen.', 'Теперь кликни печь.', { intent: 'helpful' });
-      return true;
-    }
-
-    bakeryQuestState.stage = 'bake_phrase';
-    renderDorfbuch();
-    renderBakeryChips();
-    setBakeryStatus('Brot backen');
-    await bakerySpeak(npc, 'Und jetzt? Sag den letzten Satz.', 'Скажи последний шаг.', { intent: 'helpful' });
-    return true;
-  }
-
-  if (bakeryQuestState.stage === 'bake_action') {
-    await completeBakeryQuest(npc);
-    return true;
-  }
-
-  return true;
-}
-
-function handleBakeryAction(action) {
-  if (!action) {
-    return false;
-  }
-
-  completeBakeryAction(action).catch((error) => {
-    console.error(error);
-    setStatus(error.message || 'Bakery action failed', 'error');
-  });
-  return true;
 }
 
 function handleGasthausCanvasClick(event) {
@@ -5061,14 +4916,6 @@ function handleBakeryCanvasClick(event) {
   const hits = raycaster.intersectObject(bakeryRoot, true);
 
   if (!hits.length) {
-    return;
-  }
-
-  const action = findBakeryAction(hits[0].object);
-
-  if (action) {
-    const point = hits[0].point.clone();
-    moveDirectlyToPoint(point, action, null);
     return;
   }
 
@@ -6801,7 +6648,7 @@ function setQuestStatus(message) {
 }
 
 function setQuestSpeechLine(de, ru = '') {
-  questState.currentLine = { de, ru };
+  questState.currentLine = { de: decorateGermanNouns(de), ru };
   renderDialogueHeader();
 }
 
@@ -7578,7 +7425,8 @@ function renderDialogue() {
 function appendDialogue(npc, speaker, text) {
   npc.dialogue.push({
     speaker,
-    text,
+    // NPC lines get emoji hints after object nouns; player lines stay as typed.
+    text: speaker === 'npc' ? decorateGermanNouns(text) : text,
     at: Date.now(),
   });
   npc.dialogue = npc.dialogue.slice(-MAX_DIALOGUE_LINES * 2);
@@ -8761,10 +8609,6 @@ function finishArrival(action = null, arrivalPoint = null, npcAction = null) {
   }
 
   if (locationState.current === LOCATION_GASTHAUS && handleGasthausAction(action)) {
-    return;
-  }
-
-  if (locationState.current === LOCATION_BAKERY && handleBakeryAction(action)) {
     return;
   }
 
