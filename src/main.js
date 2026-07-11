@@ -56,6 +56,10 @@ const dorfbuchOpenButton = document.querySelector('#dorfbuch-open');
 const dorfbuchPanel = document.querySelector('#dorfbuch-panel');
 const dorfbuchCloseButton = document.querySelector('#dorfbuch-close');
 const dorfbuchContent = document.querySelector('#dorfbuch-content');
+const lessonOpenButton = document.querySelector('#lesson-open');
+const lessonPanel = document.querySelector('#lesson-panel');
+const lessonCloseButton = document.querySelector('#lesson-close');
+const lessonContent = document.querySelector('#lesson-content');
 const walletOpenButton = document.querySelector('#wallet-open');
 const walletPanel = document.querySelector('#wallet-panel');
 const walletCloseButton = document.querySelector('#wallet-close');
@@ -89,6 +93,8 @@ const NPC_OVERRIDE_STORAGE_KEY = 'berlin-game.npc-overrides.v1';
 const MAP_URL = '/fantasy-town.glb';
 const GASTHAUS_INTERIOR_URL = '/Tavern%20noch%20eine.glb';
 const BAKERY_INTERIOR_URL = '/bakery_filled_shelves.glb';
+const UHR_TOWER_URL = '/Uhrturm.glb';
+const FAMILY_HOME_URL = '/House_Interior.glb';
 // The interior is fitted + centred on its ground-floor tiles so roof overhangs
 // never shrink or offset the playable area (see normalizeGasthausModel).
 const GASTHAUS_FLOOR_SPAN = 10.8;
@@ -177,6 +183,10 @@ const BAKERY_DOOR_POINT = new THREE.Vector3(39.452, VILLAGE_GROUND_Y, 80.653);
 const BAKERY_APPROACH_POINT = new THREE.Vector3(39.452, VILLAGE_GROUND_Y, 80.653);
 const BAKERY_RETURN_POINT = new THREE.Vector3(40.6, VILLAGE_GROUND_Y, 79.5);
 const BAKERY_ENTRY_RADIUS = 1.15;
+const UHR_TOWER_POINT = new THREE.Vector3(58.8, VILLAGE_GROUND_Y, 61.1);
+const UHR_TOWER_APPROACH_POINT = new THREE.Vector3(54.6, VILLAGE_GROUND_Y, 63.4);
+const FAMILY_HOME_POINT = new THREE.Vector3(45.2, VILLAGE_GROUND_Y, 54.2);
+const FAMILY_HOME_APPROACH_POINT = new THREE.Vector3(49.2, VILLAGE_GROUND_Y, 56.0);
 // Interior coordinates for "Tavern noch eine": the floor is centred on the
 // origin (X in [-5.4, 5.4], Z in [-4.3, 4.3]) with its surface at y = 0. The
 // entrance is on the +Z (front) side; the bar sits front-left, the fireplace
@@ -202,6 +212,24 @@ const BAKERY_ENTRY_TARGET = {
   action: 'enter_bakery',
   position: serializePlainVector(BAKERY_DOOR_POINT),
   approachPosition: serializePlainVector(BAKERY_APPROACH_POINT),
+};
+const UHR_TOWER_TARGET = {
+  id: 'uhrturm_gruenbach',
+  label: 'Uhrturm',
+  aliases: ['uhrturm', 'uhr', 'clock tower', 'turm', 'часовая башня', 'часы'],
+  type: 'poi',
+  action: '',
+  position: serializePlainVector(UHR_TOWER_POINT),
+  approachPosition: serializePlainVector(UHR_TOWER_APPROACH_POINT),
+};
+const FAMILY_HOME_TARGET = {
+  id: 'familienhaus_emil',
+  label: 'Familienhaus',
+  aliases: ['familienhaus', 'familie', 'haus', 'home', 'emil haus', 'дом семьи', 'семья'],
+  type: 'poi',
+  action: '',
+  position: serializePlainVector(FAMILY_HOME_POINT),
+  approachPosition: serializePlainVector(FAMILY_HOME_APPROACH_POINT),
 };
 const GASTHAUS_NPCS = [
   {
@@ -255,6 +283,11 @@ const SOURCE_LOCKED_NPC_IDS = new Set([
   'eierfrau_lena',
   'gemuesehaendlerin_rosa',
   'baeckerei_hans',
+  'uhrmacher_konrad',
+  'familie_emil',
+  'familie_mama_sara',
+  'familie_papa_otto',
+  'familie_schwester_anna',
 ]);
 const GASTHAUS_DOOR_TARGETS = [
   { id: 'room_eins', label: 'Tür eins', word: 'eins', position: new THREE.Vector3(-3.2, 0, -3.6) },
@@ -350,6 +383,8 @@ const MARKET_LIST_ITEMS = {
   milk: 'die Milch - 1 Liter',
 };
 const QUEST_BAKERY_ID = 'in_der_baeckerei';
+const QUEST_UHRTURM_ID = 'der_uhrturm';
+const QUEST_FAMILY_ID = 'die_familie';
 const MARKET_MERCHANT_NPCS = [
   {
     id: 'kaesehaendler_otto',
@@ -399,6 +434,69 @@ const BAKERY_NPCS = [
     yaw: -2.49,
   },
 ];
+const UHRTURM_NPCS = [
+  {
+    id: 'uhrmacher_konrad',
+    label: 'Uhrmacher Konrad',
+    shortName: 'Konrad',
+    role: 'Konrad, the worried clockmaker at the village clock tower. He teaches time phrases slowly and clearly.',
+    aliases: ['konrad', 'uhrmacher', 'clockmaker', 'uhrturm', 'часовщик', 'конрад'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
+    voiceId: ELEVENLABS_VOICES.adam,
+    position: new THREE.Vector3(54.7, VILLAGE_GROUND_Y, 63.5),
+    yaw: 2.25,
+  },
+];
+const FAMILY_NPCS = [
+  {
+    id: 'familie_emil',
+    label: 'Emil',
+    shortName: 'Emil',
+    role: 'Emil, a lost boy on the village square. He speaks simple A1 German about his family.',
+    aliases: ['emil', 'kind', 'junge', 'boy', 'familie', 'ребенок', 'мальчик'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
+    voiceId: ELEVENLABS_VOICES.elli,
+    position: new THREE.Vector3(62.6, VILLAGE_GROUND_Y, 65.0),
+    yaw: -2.35,
+    targetHeight: 1.35,
+  },
+  {
+    id: 'familie_mama_sara',
+    label: 'Mama Sara',
+    shortName: 'Sara',
+    role: 'Sara, Emil’s mother. She is warm and grateful.',
+    aliases: ['sara', 'mama', 'mutter', 'emils mama', 'emil mama', 'мама', 'мать'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.hijabiProfessional,
+    voiceId: ELEVENLABS_VOICES.rachel,
+    position: new THREE.Vector3(49.2, VILLAGE_GROUND_Y, 54.6),
+    yaw: 2.45,
+    targetHeight: 2.05,
+  },
+  {
+    id: 'familie_papa_otto',
+    label: 'Papa Otto',
+    shortName: 'Otto',
+    role: 'Otto, Emil’s father. He wears glasses in the story clue and speaks calmly.',
+    aliases: ['papa', 'vater', 'otto familie', 'emils papa', 'emil papa', 'папа', 'отец'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.berliner,
+    voiceId: ELEVENLABS_VOICES.josh,
+    position: new THREE.Vector3(43.6, VILLAGE_GROUND_Y, 56.8),
+    yaw: 1.1,
+    targetHeight: 2.1,
+  },
+  {
+    id: 'familie_schwester_anna',
+    label: 'Schwester Anna',
+    shortName: 'Anna',
+    role: 'Anna, Emil’s little sister. She answers with very simple A1 German.',
+    aliases: ['anna', 'schwester', 'emils schwester', 'sister', 'сестра'],
+    modelUrl: GASTHAUS_CHARACTER_URLS.oliveCoat,
+    voiceId: ELEVENLABS_VOICES.bella,
+    position: new THREE.Vector3(47.2, VILLAGE_GROUND_Y, 51.0),
+    yaw: -0.6,
+    targetHeight: 1.45,
+  },
+];
 const MARKET_EGG_NUMBERS = new Map([
   ['eins', 1],
   ['ein', 1],
@@ -437,6 +535,48 @@ const GERMAN_NUMBERS = [
   'neunzehn',
   'zwanzig',
 ];
+const RUSSIAN_NUMBERS = [
+  'ноль',
+  'один',
+  'два',
+  'три',
+  'четыре',
+  'пять',
+  'шесть',
+  'семь',
+  'восемь',
+  'девять',
+  'десять',
+  'одиннадцать',
+  'двенадцать',
+  'тринадцать',
+  'четырнадцать',
+  'пятнадцать',
+  'шестнадцать',
+  'семнадцать',
+  'восемнадцать',
+  'девятнадцать',
+  'двадцать',
+];
+const GERMAN_HOUR_WORDS = new Map([
+  ['eins', 1],
+  ['ein', 1],
+  ['zwei', 2],
+  ['drei', 3],
+  ['vier', 4],
+  ['fuenf', 5],
+  ['funf', 5],
+  ['fünf', 5],
+  ['sechs', 6],
+  ['sieben', 7],
+  ['acht', 8],
+  ['neun', 9],
+  ['zehn', 10],
+  ['elf', 11],
+  ['zwoelf', 12],
+  ['zwolf', 12],
+  ['zwölf', 12],
+]);
 const QUEST_GUARD_IDLE_URL = '/assets/mixamo/glb/Idle%20Default%20beliner.glb';
 // Used only when the asset manifest reports no rigged characters. This is still
 // a real GLB from /assets/mixamo/characters, never a generated stand-in.
@@ -793,6 +933,162 @@ const bakeryQuestState = {
     bread: false,
   },
 };
+const uhrturmQuestState = {
+  unlocked: false,
+  active: false,
+  started: false,
+  completed: false,
+  stage: 'locked',
+  pocketWatch: false,
+  calibrationIndex: 0,
+  serviceIndex: 0,
+  scheduleIndex: 0,
+  currentTimeMinutes: 180,
+  schedule: {
+    markt: false,
+    ida: false,
+    bakery: false,
+  },
+};
+const familyQuestState = {
+  unlocked: false,
+  active: false,
+  started: false,
+  completed: false,
+  stage: 'locked',
+  clues: {
+    mama: false,
+    papa: false,
+    schwester: false,
+  },
+  found: {
+    mama: false,
+    papa: false,
+    schwester: false,
+  },
+  selfStory: false,
+  homeUnlocked: false,
+};
+const UHR_TIME_CALIBRATION_STEPS = [
+  {
+    minutes: 180,
+    answer: 'Es ist drei Uhr',
+    prompt: 'Die Uhr zeigt drei Uhr. Sag: Es ist drei Uhr.',
+    ru: 'Часы показывают три часа. Скажи: Es ist drei Uhr.',
+  },
+  {
+    minutes: 150,
+    answer: 'Es ist halb drei',
+    prompt: 'Jetzt: halb drei. Das ist 2:30 - halb auf dem Weg zu drei.',
+    ru: 'Теперь: halb drei. Это 2:30, половина пути к трём.',
+  },
+  {
+    minutes: 195,
+    answer: 'Es ist Viertel nach drei',
+    prompt: 'Jetzt ist die Viertelstunde nach drei. Sag: Es ist Viertel nach drei.',
+    ru: 'Теперь четверть после трёх. Скажи: Es ist Viertel nach drei.',
+  },
+  {
+    minutes: 165,
+    answer: 'Es ist Viertel vor drei',
+    prompt: 'Jetzt ist eine Viertelstunde vor drei. Sag: Es ist Viertel vor drei.',
+    ru: 'Теперь четверть до трёх. Скажи: Es ist Viertel vor drei.',
+  },
+];
+const UHR_TIME_SERVICE_STEPS = [
+  {
+    speaker: 'Eine Marktfrau',
+    question: 'Entschuldigung, wie spät ist es?',
+    ruQuestion: 'Извините, который час?',
+    minutes: 420,
+    answer: 'Es ist sieben Uhr',
+    success: 'Danke! Um sieben Uhr öffnet der Markt.',
+    ruSuccess: 'Спасибо! В семь часов открывается рынок.',
+  },
+  {
+    speaker: 'Ida',
+    question: 'Wie spät ist es? Ich muss zur Schule.',
+    ruQuestion: 'Который час? Мне нужно в школу.',
+    minutes: 480,
+    answer: 'Es ist acht Uhr',
+    success: 'Danke! Um acht Uhr geht Ida zur Schule.',
+    ruSuccess: 'Спасибо! В восемь Ida идёт в школу.',
+  },
+  {
+    speaker: 'Ein alter Mann',
+    question: 'Wie spät ist es? Ist es schon halb vier?',
+    ruQuestion: 'Который час? Уже половина четвёртого?',
+    minutes: 210,
+    answer: 'Es ist halb vier',
+    success: 'Richtig. Halb vier ist 3:30.',
+    ruSuccess: 'Верно. Halb vier значит 3:30.',
+  },
+];
+const UHR_SCHEDULE_STEPS = [
+  {
+    id: 'markt',
+    answer: 'Um sieben Uhr öffnet der Markt.',
+    pattern: /um sieben uhr offnet der markt/,
+    prompt: 'Setz den Markt in den Plan: Um sieben Uhr öffnet der Markt.',
+    ruPrompt: 'Поставь рынок в расписание: в семь часов рынок открывается.',
+  },
+  {
+    id: 'ida',
+    answer: 'Um acht Uhr geht Ida zur Schule.',
+    pattern: /um acht uhr geht ida zur schule/,
+    prompt: 'Jetzt Ida: Um acht Uhr geht Ida zur Schule.',
+    ruPrompt: 'Теперь Ida: в восемь часов Ida идёт в школу.',
+  },
+  {
+    id: 'bakery',
+    answer: 'Am Abend schließt die Bäckerei.',
+    pattern: /am abend schlie(?:ss|ß)t die backerei/,
+    prompt: 'Zum Schluss: Am Abend schließt die Bäckerei.',
+    ruPrompt: 'В конце: вечером пекарня закрывается.',
+  },
+];
+const FAMILY_RELATION_STEPS = [
+  {
+    key: 'mama',
+    npcId: 'familie_mama_sara',
+    label: 'Mama',
+    question: 'Ist das deine Mama?',
+    possessive: 'meine Mama',
+    clue: 'Meine Mama hat einen roten Hut.',
+    clueRu: 'Моя мама носит красную шляпу.',
+    success: 'Ja! Das ist meine Mama! Mama, ich bin hier!',
+    successRu: 'Да! Это моя мама! Мама, я здесь!',
+    wrong: 'Nein! Das ist nicht meine Mama. Meine Mama ist eine Frau!',
+    wrongRu: 'Нет! Это не моя мама. Моя мама - женщина!',
+  },
+  {
+    key: 'papa',
+    npcId: 'familie_papa_otto',
+    label: 'Papa',
+    question: 'Ist das dein Papa?',
+    possessive: 'mein Papa',
+    clue: 'Mein Papa trägt eine Brille.',
+    clueRu: 'Мой папа носит очки.',
+    success: 'Ja! Das ist mein Papa!',
+    successRu: 'Да! Это мой папа!',
+    wrong: 'Nein! Das ist nicht mein Papa. Mein Papa ist ein Mann!',
+    wrongRu: 'Нет! Это не мой папа. Мой папа - мужчина!',
+  },
+  {
+    key: 'schwester',
+    npcId: 'familie_schwester_anna',
+    label: 'Schwester',
+    question: 'Ist das deine Schwester?',
+    possessive: 'meine Schwester',
+    clue: 'Meine Schwester Anna ist klein.',
+    clueRu: 'Моя сестра Anna маленькая.',
+    success: 'Ja! Das ist meine Schwester Anna!',
+    successRu: 'Да! Это моя сестра Anna!',
+    wrong: 'Nein! Das ist nicht meine Schwester. Meine Schwester ist klein!',
+    wrongRu: 'Нет! Это не моя сестра. Моя сестра маленькая!',
+  },
+];
+const FAMILY_STEP_BY_ID = new Map(FAMILY_RELATION_STEPS.map((step) => [step.npcId, step]));
 const RUSSIAN_LESSON_EXPLANATIONS = {
   guardGreeting:
     'Сейчас тренируем приветствие и ответ на вопрос кто ты. Слушай немецкую фразу, потом назови себя: Ich bin плюс имя.',
@@ -834,6 +1130,14 @@ const RUSSIAN_LESSON_EXPLANATIONS = {
     'Теперь снова рамка с muss: Ich muss den Teig kneten. Инфинитив kneten в конце.',
   bakeryFinal:
     'Финал без подсказок: сам собери три модальные фразы в правильном порядке: мука, тесто, хлеб.',
+  uhrturmIntro:
+    'Новый квест про время. Главная фраза: Wie spät ist es? Ответ: Es ist... Например: Es ist drei Uhr. В немецком halb drei значит 2:30, то есть половина пути к трём.',
+  familyIntro:
+    'Новый квест про семью. Главное: mein для der/das, meine для die. Скажи Emil: Ich will helfen.',
+  familySearch:
+    'Ищем семью Emil. Для Mama и Schwester говорим deine/meine, для Papa - dein/mein: Ist das deine Mama? Ist das dein Papa?',
+  familySelf:
+    'Финал: расскажи о своей семье мягко и просто. Можно сказать: Meine Mama ..., mein Papa ..., ich habe eine Schwester.',
 };
 
 function getCurrentRussianLessonKey(npc = selectedNpc) {
@@ -919,6 +1223,18 @@ function getCurrentRussianLessonKey(npc = selectedNpc) {
     }
   }
 
+  if (isUhrturmKonrad(npc)) {
+    return 'uhrturmIntro';
+  }
+
+  if (isFamilyNpc(npc)) {
+    if (familyQuestState.stage === 'self_story') {
+      return 'familySelf';
+    }
+
+    return familyQuestState.started ? 'familySearch' : 'familyIntro';
+  }
+
   return '';
 }
 
@@ -944,11 +1260,199 @@ function showRussianQuestHint(npc = selectedNpc) {
 
   showSceneHint(text, 12000);
 }
+
+const LESSON_DOCUMENTS = [
+  {
+    id: 'guardGreeting',
+    title: 'Quest 01: Begrüßung',
+    body: [
+      'Ich bin ... = я ...',
+      'Ich komme aus ... = я из ...',
+      'В простом предложении глагол стоит на втором месте.',
+    ],
+    table: [
+      ['Deutsch', 'Русский'],
+      ['Ich bin Kirill.', 'Я Кирилл.'],
+      ['Ich komme aus Berlin.', 'Я из Берлина.'],
+    ],
+  },
+  {
+    id: 'gasthausRoom',
+    title: 'Quest 02: Zimmer und Preis',
+    body: [
+      'Вежливая форма: Haben Sie ...?',
+      'Цена спрашивается через: Wie viel kostet ...?',
+    ],
+    table: [
+      ['Frage', 'Значение'],
+      ['Haben Sie ein Zimmer?', 'У вас есть комната?'],
+      ['Wie viel kostet das Zimmer?', 'Сколько стоит комната?'],
+    ],
+  },
+  {
+    id: 'questThreeIntro',
+    title: 'Quest 03: W-Fragen',
+    body: [
+      'W-вопросы помогают заполнить Dorfbuch.',
+      'Wer? = кто? Was? = что? Wo? = где?',
+    ],
+    table: [
+      ['Frage', 'Ответ'],
+      ['Wer bist du?', 'Ich bin Hans.'],
+      ['Was machst du?', 'Ich mache Brot.'],
+      ['Wo wohnst du?', 'Ich wohne hier.'],
+    ],
+  },
+  {
+    id: 'marketAccusative',
+    title: 'Quest 04: Akkusativ beim Kaufen',
+    body: [
+      'После ich möchte / ich nehme предмет часто идет в Akkusativ.',
+      'Главная замена: der -> den, ein -> einen.',
+    ],
+    table: [
+      ['Nominativ', 'Akkusativ'],
+      ['der Käse', 'den Käse'],
+      ['ein Käse', 'einen Käse'],
+      ['die Milch', 'die Milch'],
+    ],
+  },
+  {
+    id: 'bakeryIntro',
+    title: 'Quest 05: Modal-Klammer',
+    body: [
+      'Модальный глагол стоит на втором месте.',
+      'Смысловой глагол уходит в конец.',
+      'Это рамка: Ich muss ... waschen.',
+    ],
+    table: [
+      ['Правильно', 'Почему'],
+      ['Ich muss die Hände waschen.', 'muss на 2 месте, waschen в конце'],
+      ['Ich kann das Mehl holen.', 'kann на 2 месте, holen в конце'],
+      ['Ich will Brot backen.', 'will на 2 месте, backen в конце'],
+    ],
+  },
+  {
+    id: 'uhrturmIntro',
+    title: 'Quest 06: Zeit und Uhrturm',
+    body: [
+      'Вопрос: Wie spät ist es?',
+      'Ответ: Es ist ...',
+      'halb drei = 2:30, то есть половина пути к трём.',
+      'Если время в начале, глагол остается на втором месте: Um sieben Uhr öffnet der Markt.',
+    ],
+    table: [
+      ['Zeit', 'Deutsch'],
+      ['3:00', 'Es ist drei Uhr.'],
+      ['2:30', 'Es ist halb drei.'],
+      ['3:15', 'Es ist Viertel nach drei.'],
+      ['2:45', 'Es ist Viertel vor drei.'],
+      ['7:00 + Markt', 'Um sieben Uhr öffnet der Markt.'],
+    ],
+  },
+  {
+    id: 'familyIntro',
+    title: 'Quest 07: Die Familie',
+    body: [
+      'Притяжательные слова зависят от рода существительного.',
+      'der/das: mein, dein, sein. die: meine, deine, seine/ihre.',
+      'В поиске семьи форма помогает понять, кого именно надо найти.',
+    ],
+    table: [
+      ['Person', 'Deutsch', 'Warum'],
+      ['Papa / Vater', 'mein Papa, dein Papa', 'der Vater -> mein/dein'],
+      ['Mama / Mutter', 'meine Mama, deine Mama', 'die Mutter -> meine/deine'],
+      ['Schwester', 'meine Schwester', 'die Schwester -> meine'],
+      ['Kind', 'mein Kind', 'das Kind -> mein'],
+      ['Frage', 'Ist das deine Mama?', 'твоя мама?'],
+    ],
+  },
+];
+
+let highlightedLessonId = '';
+
+function renderLessonDocuments(activeId = highlightedLessonId || getCurrentRussianLessonKey()) {
+  if (!lessonContent) {
+    return;
+  }
+
+  lessonContent.replaceChildren();
+
+  for (const doc of LESSON_DOCUMENTS) {
+    const page = document.createElement('article');
+    page.className = 'lesson-page';
+    page.id = `lesson-${doc.id}`;
+
+    if (doc.id === activeId) {
+      page.classList.add('active');
+    }
+
+    const title = document.createElement('h2');
+    title.textContent = doc.title;
+    page.append(title);
+
+    for (const paragraph of doc.body) {
+      const p = document.createElement('p');
+      p.textContent = paragraph;
+      page.append(p);
+    }
+
+    if (doc.table?.length) {
+      const table = document.createElement('table');
+
+      for (const [index, row] of doc.table.entries()) {
+        const tr = document.createElement('tr');
+
+        for (const cell of row) {
+          const element = document.createElement(index === 0 ? 'th' : 'td');
+          element.textContent = cell;
+          tr.append(element);
+        }
+
+        table.append(tr);
+      }
+
+      page.append(table);
+    }
+
+    lessonContent.append(page);
+  }
+
+  if (activeId) {
+    requestAnimationFrame(() => {
+      document.querySelector(`#lesson-${activeId}`)?.scrollIntoView({ block: 'start' });
+    });
+  }
+}
+
+function markLessonForAttention(lessonId = getCurrentRussianLessonKey()) {
+  if (!lessonId || !lessonOpenButton) {
+    return;
+  }
+
+  if (highlightedLessonId === lessonId && lessonOpenButton.classList.contains('needs-attention')) {
+    return;
+  }
+
+  highlightedLessonId = lessonId;
+  lessonOpenButton.classList.add('needs-attention');
+}
+
+function openLessonPanel(lessonId = highlightedLessonId || getCurrentRussianLessonKey()) {
+  highlightedLessonId = lessonId || highlightedLessonId;
+  renderLessonDocuments(highlightedLessonId);
+  setFeaturePanel(lessonPanel, true);
+  lessonOpenButton?.classList.remove('needs-attention');
+}
 let gasthausRoot = null;
 let gasthausModel = null;
 let gasthausInteractables = new Map();
 let bakeryRoot = null;
 let bakeryModel = null;
+let uhrturmRoot = null;
+let uhrturmModel = null;
+let familyHomeRoot = null;
+let familyHomeModel = null;
 
 const agent = {
   position: new THREE.Vector3(0, 0, 0),
@@ -1001,6 +1505,12 @@ window.__berlinGame = {
   },
   get marketQuestState() {
     return JSON.parse(JSON.stringify(marketQuestState));
+  },
+  get uhrturmQuestState() {
+    return JSON.parse(JSON.stringify(uhrturmQuestState));
+  },
+  get familyQuestState() {
+    return JSON.parse(JSON.stringify(familyQuestState));
   },
   get characterAnimations() {
     return [...characterAnimations.keys()];
@@ -1533,6 +2043,30 @@ function publishDebugState() {
       pendingAction: bakeryQuestState.pendingAction,
       steps: bakeryQuestState.steps,
     },
+    uhrturmQuest: {
+      unlocked: uhrturmQuestState.unlocked,
+      active: uhrturmQuestState.active,
+      started: uhrturmQuestState.started,
+      completed: uhrturmQuestState.completed,
+      stage: uhrturmQuestState.stage,
+      pocketWatch: uhrturmQuestState.pocketWatch,
+      calibrationIndex: uhrturmQuestState.calibrationIndex,
+      serviceIndex: uhrturmQuestState.serviceIndex,
+      scheduleIndex: uhrturmQuestState.scheduleIndex,
+      currentTimeMinutes: uhrturmQuestState.currentTimeMinutes,
+      schedule: uhrturmQuestState.schedule,
+    },
+    familyQuest: {
+      unlocked: familyQuestState.unlocked,
+      active: familyQuestState.active,
+      started: familyQuestState.started,
+      completed: familyQuestState.completed,
+      stage: familyQuestState.stage,
+      clues: familyQuestState.clues,
+      found: familyQuestState.found,
+      selfStory: familyQuestState.selfStory,
+      homeUnlocked: familyQuestState.homeUnlocked,
+    },
     character: {
       loaded: Boolean(characterModel),
       animations: [...characterAnimations.keys()],
@@ -1603,6 +2137,14 @@ function getRegistryCustomTargets() {
     storyTargets.push(BAKERY_ENTRY_TARGET);
   }
 
+  if (uhrturmQuestState.unlocked) {
+    storyTargets.push(UHR_TOWER_TARGET);
+  }
+
+  if (familyQuestState.unlocked) {
+    storyTargets.push(FAMILY_HOME_TARGET);
+  }
+
   return [...storyTargets, ...customTargets];
 }
 
@@ -1616,6 +2158,14 @@ function isNpcActiveForLocation(npc) {
   }
 
   if (npc?.questId === QUEST_BAKERY_ID && !bakeryQuestState.unlocked) {
+    return false;
+  }
+
+  if (npc?.questId === QUEST_UHRTURM_ID && !uhrturmQuestState.unlocked) {
+    return false;
+  }
+
+  if (npc?.questId === QUEST_FAMILY_ID && !familyQuestState.unlocked) {
     return false;
   }
 
@@ -1646,6 +2196,26 @@ function isBakeryHans(npc) {
   return npc?.id === 'baeckerei_hans' && bakeryQuestState.unlocked;
 }
 
+function isUhrturmKonrad(npc) {
+  return npc?.id === 'uhrmacher_konrad' && uhrturmQuestState.unlocked;
+}
+
+function isFamilyNpc(npc) {
+  return npc?.questId === QUEST_FAMILY_ID && familyQuestState.unlocked;
+}
+
+function isFamilyEmil(npc) {
+  return npc?.id === 'familie_emil' && familyQuestState.unlocked;
+}
+
+function getFamilyEmil() {
+  return getNpcById('familie_emil');
+}
+
+function getFamilyMama() {
+  return getNpcById('familie_mama_sara');
+}
+
 function getBerta() {
   return getNpcById('frau_berta');
 }
@@ -1656,6 +2226,10 @@ function getBakeryHans() {
 
 function getGermanNumber(value) {
   return GERMAN_NUMBERS[value] || String(value);
+}
+
+function getRussianNumber(value) {
+  return RUSSIAN_NUMBERS[value] || String(value);
 }
 
 function waitFor(ms) {
@@ -1669,7 +2243,6 @@ function escapeRegExp(value) {
 const LEARNING_NOUN_EMOJIS = [
   { words: ['Dorfbuch'], emoji: '📖' },
   { words: ['Brief'], emoji: '✉️' },
-  { words: ['Zimmer'], emoji: '🛏️' },
   { words: ['Tür', 'Türen'], emoji: '🚪' },
   { words: ['Münze', 'Münzen'], emoji: '🪙' },
   { words: ['Theke'], emoji: '🍺' },
@@ -1738,6 +2311,14 @@ function updateLocationHud() {
 }
 
 function getActiveQuestHudText() {
+  if (familyQuestState.unlocked) {
+    return 'Quest 07: Die Familie';
+  }
+
+  if (uhrturmQuestState.unlocked) {
+    return 'Quest 06: Der Uhrturm';
+  }
+
   if (bakeryQuestState.unlocked) {
     return 'Quest 05: In der Bäckerei';
   }
@@ -1905,6 +2486,69 @@ function getBakeryStepRows() {
   ];
 }
 
+function getUhrturmRows() {
+  const stageLabels = {
+    locked: 'Noch nicht gestartet.',
+    find_konrad: 'Finde Uhrmacher Konrad am Uhrturm.',
+    calibration: `Kalibrierung ${Math.min(uhrturmQuestState.calibrationIndex + 1, UHR_TIME_CALIBRATION_STEPS.length)}/${UHR_TIME_CALIBRATION_STEPS.length}`,
+    service: `Zeitdienst ${Math.min(uhrturmQuestState.serviceIndex + 1, UHR_TIME_SERVICE_STEPS.length)}/${UHR_TIME_SERVICE_STEPS.length}`,
+    schedule: `Dorfplan ${Math.min(uhrturmQuestState.scheduleIndex + 1, UHR_SCHEDULE_STEPS.length)}/${UHR_SCHEDULE_STEPS.length}`,
+    complete: 'Die Uhr läuft. Taschenuhr erhalten.',
+  };
+
+  return [
+    ['Status', stageLabels[uhrturmQuestState.stage] || 'Konrad braucht Hilfe.'],
+    ['Ziel', 'Hilf Konrad mit der Zeit.'],
+    ['Startsatz', 'Ich gehe Konrad helfen.'],
+    ['Frage', 'Wie spät ist es?'],
+    ['Belohnung', uhrturmQuestState.pocketWatch ? 'die Taschenuhr' : 'noch offen'],
+  ];
+}
+
+function getUhrturmVocabularyRows() {
+  return [
+    ['Zeitfrage', 'Wie spät ist es? / Um wie viel Uhr?'],
+    ['Antwort', 'Es ist drei Uhr. / Es ist halb drei.'],
+    ['Viertel', 'Viertel nach drei / Viertel vor drei'],
+    ['Tageszeit', 'der Morgen, der Mittag, der Abend'],
+    ['Inversion', 'Um sieben Uhr öffnet der Markt.'],
+  ];
+}
+
+function getFamilyRows() {
+  const stageLabels = {
+    locked: 'Noch nicht gestartet.',
+    find_emil: 'Finde Emil auf dem Platz.',
+    offer: 'Sag Emil: Ich will helfen.',
+    clues: 'Frag Emil nach seiner Familie.',
+    find_mama: 'Finde seine Mama.',
+    find_papa: 'Finde seinen Papa.',
+    find_schwester: 'Finde seine Schwester Anna.',
+    self_story: 'Erzähl kurz von deiner Familie.',
+    complete: 'Emils Familie ist wieder zusammen.',
+  };
+
+  return [
+    ['Status', stageLabels[familyQuestState.stage] || 'Hilf Emil.'],
+    ['Startsatz', 'Ich will helfen.'],
+    ['Mama', familyQuestState.found.mama ? 'gefunden' : familyQuestState.clues.mama ? 'roter Hut' : '???'],
+    ['Papa', familyQuestState.found.papa ? 'gefunden' : familyQuestState.clues.papa ? 'Brille' : '???'],
+    ['Schwester', familyQuestState.found.schwester ? 'gefunden' : familyQuestState.clues.schwester ? 'Anna ist klein' : '???'],
+    ['Haus', familyQuestState.homeUnlocked ? 'Familienhaus offen' : 'noch offen'],
+  ];
+}
+
+function getFamilyVocabularyRows() {
+  return [
+    ['Familie', 'die Familie, die Mama, der Papa, die Schwester, das Kind'],
+    ['mein', 'mein Papa / mein Kind'],
+    ['meine', 'meine Mama / meine Schwester'],
+    ['dein', 'dein Papa / dein Kind'],
+    ['deine', 'deine Mama / deine Schwester'],
+    ['Frage', 'Ist das deine Mama? Ist das dein Papa?'],
+  ];
+}
+
 function renderDorfbuch() {
   if (!dorfbuchContent) {
     return;
@@ -1974,6 +2618,32 @@ function renderDorfbuch() {
       {
         title: 'Bäckerei: Arbeit',
         rows: getBakeryStepRows(),
+      },
+    );
+  }
+
+  if (uhrturmQuestState.unlocked) {
+    cards.push(
+      {
+        title: 'Quest 06: Der Uhrturm',
+        rows: getUhrturmRows(),
+      },
+      {
+        title: 'Sprachbuch: Zeit',
+        rows: getUhrturmVocabularyRows(),
+      },
+    );
+  }
+
+  if (familyQuestState.unlocked) {
+    cards.push(
+      {
+        title: 'Quest 07: Die Familie',
+        rows: getFamilyRows(),
+      },
+      {
+        title: 'Sprachbuch: Familie',
+        rows: getFamilyVocabularyRows(),
       },
     );
   }
@@ -2159,7 +2829,7 @@ async function placeGasthausCoin() {
   gasthausQuest.wallet -= 1;
   gasthausQuest.counter += 1;
   renderWallet();
-  await gasthausSpeak(berta, `${getGermanNumber(gasthausQuest.counter)}!`, '', {
+  await gasthausSpeak(berta, `${getGermanNumber(gasthausQuest.counter)}!`, `${getRussianNumber(gasthausQuest.counter)}!`, {
     append: false,
     intent: 'counting',
     focusInput: false,
@@ -2426,16 +3096,28 @@ async function sendGasthausDialogueToNpc(npc, message) {
       renderDorfbuch();
     }
 
-    const de =
+    const guestLine =
       npc.id === 'gast_hans'
         ? happy
-          ? 'Ja! Gutes Brot, gutes Bier. Prost!'
-          : 'Kein Problem. Setz dich, trink was! Prost!'
+          ? {
+              de: 'Ja! Gutes Brot, gutes Bier. Prost!',
+              ru: 'Да! Хороший хлеб, хорошее пиво. За здоровье!',
+            }
+          : {
+              de: 'Kein Problem. Setz dich, trink was! Prost!',
+              ru: 'Без проблем. Садись, выпей что-нибудь. За здоровье!',
+            }
         : happy
-        ? 'Ja! Schönes Dorf. Prost!'
-        : 'Nein? Trotzdem: Prost!';
+        ? {
+            de: 'Ja! Schönes Dorf. Prost!',
+            ru: 'Да! Красивая деревня. За здоровье!',
+          }
+        : {
+            de: 'Nein? Trotzdem: Prost!',
+            ru: 'Нет? Всё равно: за здоровье!',
+          };
 
-    await gasthausSpeak(npc, de, '', { intent: 'happy' });
+    await gasthausSpeak(npc, guestLine.de, guestLine.ru, { intent: 'happy' });
     return;
   }
 
@@ -2598,6 +3280,58 @@ function unlockBakeryQuest() {
   renderDorfbuch();
   renderTargets();
   setBakeryStatus('finde Hans in der Bäckerei');
+}
+
+function setUhrturmStatus(message) {
+  setQuestStatus(`Quest: Der Uhrturm - ${message}`);
+}
+
+function setFamilyStatus(message) {
+  setQuestStatus(`Quest: Die Familie - ${message}`);
+}
+
+function unlockUhrturmQuest() {
+  if (uhrturmQuestState.unlocked) {
+    return;
+  }
+
+  uhrturmQuestState.unlocked = true;
+  uhrturmQuestState.active = true;
+  uhrturmQuestState.stage = 'find_konrad';
+  ensureUhrturmLoaded().catch((error) => {
+    console.error('Uhrturm asset failed to load:', error);
+  });
+  ensureUhrturmNpcs().catch((error) => {
+    console.error('Uhrturm quest NPC failed to load:', error);
+  });
+  rebuildRegistryFromCustomTargets();
+  renderDorfbuch();
+  renderTargets();
+  updateQuestHud();
+  markLessonForAttention('uhrturmIntro');
+  setUhrturmStatus('finde Uhrmacher Konrad am Uhrturm');
+}
+
+function unlockFamilyQuest() {
+  if (familyQuestState.unlocked) {
+    return;
+  }
+
+  familyQuestState.unlocked = true;
+  familyQuestState.active = true;
+  familyQuestState.stage = 'find_emil';
+  ensureFamilyHomeLoaded().catch((error) => {
+    console.error('Family home asset failed to load:', error);
+  });
+  ensureFamilyNpcs().catch((error) => {
+    console.error('Family quest NPCs failed to load:', error);
+  });
+  rebuildRegistryFromCustomTargets();
+  renderDorfbuch();
+  renderTargets();
+  updateQuestHud();
+  markLessonForAttention('familyIntro');
+  setFamilyStatus('finde Emil auf dem Platz');
 }
 
 function questThreeChipsForNpc(npc) {
@@ -2770,21 +3504,21 @@ function showMarketHelp(npc = selectedNpc) {
   }
 
   if (npc.id === 'kaesehaendler_otto') {
-    marketSpeak(npc, 'Bei Otto: der Käse wird im Akkusativ DEN Käse.', 'Say: Ich möchte den Käse.', {
+    marketSpeak(npc, 'Bei Otto: der Käse wird im Akkusativ DEN Käse.', 'Скажи: Ich möchte den Käse.', {
       intent: 'helpful',
     });
     return;
   }
 
   if (npc.id === 'eierfrau_lena') {
-    marketSpeak(npc, 'Bei Lena: Sag die genaue Zahl. Sechs Eier, bitte. Und: die Milch.', 'Hans braucht 6 eggs and milk.', {
+    marketSpeak(npc, 'Bei Lena: Sag die genaue Zahl. Sechs Eier, bitte. Und: die Milch.', 'У Lena скажи точное число: Sechs Eier, bitte. Ещё нужна die Milch.', {
       intent: 'helpful',
     });
     return;
   }
 
   if (npc.id === 'gemuesehaendlerin_rosa') {
-    marketSpeak(npc, 'Bei Rosa: Wähle eine Farbe. Die roten Tomaten oder die grünen Tomaten.', 'Choose red or green tomatoes.', {
+    marketSpeak(npc, 'Bei Rosa: Wähle eine Farbe. Die roten Tomaten oder die grünen Tomaten.', 'У Rosa выбери цвет: красные или зелёные помидоры.', {
       intent: 'helpful',
     });
   }
@@ -2914,7 +3648,7 @@ async function openMarketHansDialogue(npc) {
       unlockBakeryQuest();
     }
 
-    await marketSpeak(npc, 'Der Einkauf war gut. Danke! Komm in die Bäckerei. Ich zeige dir alles.', 'Market quest already finished. Bakery unlocked.', {
+  await marketSpeak(npc, 'Der Einkauf war gut. Danke! Komm in die Bäckerei. Ich zeige dir alles.', 'Покупки готовы. Спасибо! Иди в пекарню, я всё покажу.', {
       append: false,
       intent: 'happy',
     });
@@ -2974,6 +3708,7 @@ function bakeryChipsForStage() {
 
   if (bakeryQuestState.completed) {
     return [
+      { label: 'Ich gehe Konrad helfen', submit: 'Ich gehe Konrad helfen' },
       { label: 'Danke, Hans', submit: 'Danke, Hans' },
       { label: 'Dorfbuch', action: 'open-dorfbuch' },
     ];
@@ -3180,7 +3915,8 @@ async function openBakeryDialogue(npc = getBakeryHans()) {
   }
 
   if (bakeryQuestState.completed) {
-    await bakerySpeak(npc, 'Du kannst backen! Du darfst hier arbeiten.', 'Квест пекарни завершён.', {
+    unlockUhrturmQuest();
+    await bakerySpeak(npc, 'Du kannst backen! Geh zum Uhrturm. Uhrmacher Konrad braucht Hilfe.', 'Ты умеешь печь. Иди к часовой башне: часовщику Konrad нужна помощь.', {
       append: false,
       intent: 'happy',
     });
@@ -3221,6 +3957,27 @@ async function sendBakeryDialogueToNpc(npc, message) {
 
   if (/(hilfe|help|was soll|was muss|noch mal|nochmal)/.test(text)) {
     await showBakeryHelp(npc);
+    return;
+  }
+
+  if (bakeryQuestState.completed) {
+    if (/konrad|uhrmacher|uhrturm|helfen/.test(text)) {
+      unlockUhrturmQuest();
+      await bakerySpeak(
+        npc,
+        'Ja. Geh zum Uhrturm. Uhrmacher Konrad wartet. Sag ihm: Ich gehe Konrad helfen.',
+        'Да. Иди к часовой башне. Часовщик Konrad ждёт. Скажи ему: Ich gehe Konrad helfen.',
+        { intent: 'helpful' },
+      );
+      return;
+    }
+
+    await bakerySpeak(
+      npc,
+      'Du kannst backen! Jetzt braucht Uhrmacher Konrad Hilfe am Uhrturm.',
+      'Ты умеешь печь. Теперь часовщику Konrad нужна помощь у часовой башни.',
+      { intent: 'happy' },
+    );
     return;
   }
 
@@ -3444,7 +4201,7 @@ async function openMarketMerchantDialogue(npc) {
   faceAgentToNpc(npc);
 
   if (npc.id === 'kaesehaendler_otto') {
-    await marketSpeak(npc, 'Guten Tag. Was möchtest du? Der Käse ist frisch.', 'Use accusative: den Käse.', {
+    await marketSpeak(npc, 'Guten Tag. Was möchtest du? Der Käse ist frisch.', 'Добрый день. Что ты хочешь? Сыр свежий. Используй Akkusativ: den Käse.', {
       append: false,
       intent: 'greeting',
     });
@@ -3452,7 +4209,7 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'eierfrau_lena') {
-    await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier möchtest du?', 'Hans needs six eggs and milk.', {
+    await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier möchtest du?', 'Привет! Яйца и молоко. Сколько яиц ты хочешь? Hans нужны шесть яиц и молоко.', {
       append: false,
       intent: 'greeting',
     });
@@ -3460,7 +4217,7 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'gemuesehaendlerin_rosa') {
-    await marketSpeak(npc, 'Frisches Gemüse! Rote, grüne oder gelbe Tomaten?', 'Choose a color.', {
+    await marketSpeak(npc, 'Frisches Gemüse! Rote, grüne oder gelbe Tomaten?', 'Свежие овощи! Красные, зелёные или жёлтые помидоры?', {
       append: false,
       intent: 'greeting',
     });
@@ -3471,7 +4228,7 @@ async function handleOttoMarketLine(npc, line) {
   const text = normalizeText(line);
 
   if (!marketWantsCheese(text)) {
-    await marketSpeak(npc, 'Ich verkaufe Käse. Sag: Ich möchte den Käse.', 'Otto sells cheese.', {
+    await marketSpeak(npc, 'Ich verkaufe Käse. Sag: Ich möchte den Käse.', 'Я продаю сыр. Скажи: Ich möchte den Käse.', {
       intent: 'helpful',
     });
     return;
@@ -3484,7 +4241,7 @@ async function handleOttoMarketLine(npc, line) {
     marketQuestState.basket.cheese = true;
     renderDorfbuch();
     setMarketStatus('Käse im Korb');
-    await marketSpeak(npc, 'Sehr gut: DEN Käse. Hier ist ein Stück Käse.', 'Correct accusative. Cheese is in the basket.', {
+    await marketSpeak(npc, 'Sehr gut: DEN Käse. Hier ist ein Stück Käse.', 'Очень хорошо: DEN Käse. Вот кусок сыра. Сыр в корзине.', {
       intent: 'happy',
     });
     return;
@@ -3497,13 +4254,13 @@ async function handleOttoMarketLine(npc, line) {
       marketQuestState.basket.cheese = true;
       renderDorfbuch();
       setMarketStatus('Käse im Korb');
-      await marketSpeak(npc, 'Na gut. Ich helfe: DEN Käse. Hier ist der Käse.', 'Second try: Otto recasts and gives the cheese.', {
+      await marketSpeak(npc, 'Na gut. Ich helfe: DEN Käse. Hier ist der Käse.', 'Ладно, я помогу: DEN Käse. Вот сыр.', {
         intent: 'helpful',
       });
       return;
     }
 
-    await marketSpeak(npc, 'Hm? DEN Käse? Sag bitte: Ich möchte den Käse.', 'First B answer: clarification only.', {
+    await marketSpeak(npc, 'Hm? DEN Käse? Sag bitte: Ich möchte den Käse.', 'Хм? DEN Käse? Скажи, пожалуйста: Ich möchte den Käse.', {
       intent: 'thinking',
     });
   }
@@ -3522,7 +4279,7 @@ async function handleLenaMarketLine(npc, line) {
   if (wantsEggs) {
     if (!eggCount) {
       marketQuestState.clarifyCounts.lena += 1;
-      await marketSpeak(npc, 'Wie viele Eier? Hans zählt genau.', 'Say: Sechs Eier, bitte.', {
+      await marketSpeak(npc, 'Wie viele Eier? Hans zählt genau.', 'Сколько яиц? Hans считает точно. Скажи: Sechs Eier, bitte.', {
         intent: 'helpful',
       });
       return;
@@ -3542,7 +4299,7 @@ async function handleLenaMarketLine(npc, line) {
   }
 
   if (!responses.length) {
-    await marketSpeak(npc, 'Ich habe Eier und Milch. Sag: Sechs Eier, bitte. Oder: Ich nehme die Milch.', 'Eggs and milk stand.', {
+    await marketSpeak(npc, 'Ich habe Eier und Milch. Sag: Sechs Eier, bitte. Oder: Ich nehme die Milch.', 'У меня есть яйца и молоко. Скажи: Sechs Eier, bitte. Или: Ich nehme die Milch.', {
       intent: 'helpful',
     });
     return;
@@ -3560,7 +4317,7 @@ async function handleRosaMarketLine(npc, line) {
   const color = getMarketTomatoColor(line);
 
   if (!marketWantsTomatoes(text) && !color && !marketTextIncludes(text, ['gemuse', 'gemuese', 'obst'])) {
-    await marketSpeak(npc, 'Ich verkaufe Gemüse und Obst. Welche Tomaten: rot, grün oder gelb?', 'Rosa asks for a color.', {
+    await marketSpeak(npc, 'Ich verkaufe Gemüse und Obst. Welche Tomaten: rot, grün oder gelb?', 'Я продаю овощи и фрукты. Какие помидоры: красные, зелёные или жёлтые?', {
       intent: 'helpful',
     });
     return;
@@ -3568,7 +4325,7 @@ async function handleRosaMarketLine(npc, line) {
 
   if (!color) {
     marketQuestState.clarifyCounts.rosa += 1;
-    await marketSpeak(npc, 'Welche denn? Rote Tomaten, grüne Tomaten oder gelbe Tomaten?', 'Choose a tomato color.', {
+    await marketSpeak(npc, 'Welche denn? Rote Tomaten, grüne Tomaten oder gelbe Tomaten?', 'Какие именно? Красные, зелёные или жёлтые помидоры?', {
       intent: 'thinking',
     });
     return;
@@ -3577,7 +4334,7 @@ async function handleRosaMarketLine(npc, line) {
   marketQuestState.basket.tomatoes = color;
   renderDorfbuch();
   setMarketStatus(`Rosa: ${color} Tomaten`);
-  await marketSpeak(npc, `Gut. Die ${color}n Tomaten sind im Korb. Frisch!`, 'Color choice saved.', {
+  await marketSpeak(npc, `Gut. Die ${color}n Tomaten sind im Korb. Frisch!`, 'Хорошо. Выбранные помидоры теперь в корзине. Свежие!', {
     intent: 'happy',
   });
 }
@@ -4095,7 +4852,7 @@ function buildGasthausNpc(definition, rigged) {
     calibrateNpcGroundBias(npc);
     npc.groundBiasDirty = false;
     refitNpcToGround(npc);
-    anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
+    anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
   }
 
   return npc;
@@ -4269,7 +5026,7 @@ function createQuestThreeNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
-  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
   syncNpcTarget(npc);
   return npc;
 }
@@ -4373,7 +5130,8 @@ function createMarketNpc(definition, rigged) {
     aliases: definition.aliases,
     voiceId: definition.voiceId || ELEVENLABS_VOICES.josh,
     location: LOCATION_VILLAGE,
-    questId: QUEST_MARKET_ID,
+    questId: definition.questId || QUEST_MARKET_ID,
+    targetHeight: definition.targetHeight || NPC_TARGET_HEIGHT,
     root,
     visual,
     model: visual,
@@ -4426,7 +5184,7 @@ function createMarketNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
-  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
   syncNpcTarget(npc);
   return npc;
 }
@@ -4460,6 +5218,79 @@ async function ensureMarketNpcs() {
   return loadedNpcs;
 }
 
+async function loadUhrturmNpc(definition) {
+  if (getNpcById(definition.id)) {
+    return getNpcById(definition.id);
+  }
+
+  try {
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    const rigged = await loadGltf(loader, definition.modelUrl);
+    return createMarketNpc({ ...definition, questId: QUEST_UHRTURM_ID }, rigged);
+  } catch (error) {
+    console.error(`Uhrturm character ${definition.id} failed to load from characters; skipping NPC.`, error);
+    return null;
+  }
+}
+
+async function ensureUhrturmNpcs() {
+  if (!uhrturmQuestState.unlocked) {
+    return [];
+  }
+
+  if (!navigation) {
+    console.warn('Uhrturm NPC load delayed: navigation is not ready yet.');
+    return [];
+  }
+
+  const loadedNpcs = await Promise.all(UHRTURM_NPCS.map((definition) => loadUhrturmNpc(definition)));
+  syncAllNpcTargets();
+  renderTargets();
+  renderDorfbuch();
+  publishDebugState();
+  return loadedNpcs;
+}
+
+async function loadFamilyNpc(definition) {
+  if (getNpcById(definition.id)) {
+    return getNpcById(definition.id);
+  }
+
+  if (!definition.modelUrl) {
+    console.error(`Family character ${definition.id} has no modelUrl; skipping NPC.`);
+    return null;
+  }
+
+  try {
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    const rigged = await loadGltf(loader, definition.modelUrl);
+    return createMarketNpc({ ...definition, questId: QUEST_FAMILY_ID }, rigged);
+  } catch (error) {
+    console.error(`Family character ${definition.id} failed to load from characters; skipping NPC.`, error);
+    return null;
+  }
+}
+
+async function ensureFamilyNpcs() {
+  if (!familyQuestState.unlocked) {
+    return [];
+  }
+
+  if (!navigation) {
+    console.warn('Family NPC load delayed: navigation is not ready yet.');
+    return [];
+  }
+
+  const loadedNpcs = await Promise.all(FAMILY_NPCS.map((definition) => loadFamilyNpc(definition)));
+  syncAllNpcTargets();
+  renderTargets();
+  renderDorfbuch();
+  publishDebugState();
+  return loadedNpcs;
+}
+
 async function ensureUnlockedQuestNpcs() {
   if (!navigation) {
     return;
@@ -4473,6 +5304,14 @@ async function ensureUnlockedQuestNpcs() {
 
   if (marketQuestState.unlocked) {
     tasks.push(ensureMarketNpcs());
+  }
+
+  if (uhrturmQuestState.unlocked) {
+    tasks.push(ensureUhrturmLoaded(), ensureUhrturmNpcs());
+  }
+
+  if (familyQuestState.unlocked) {
+    tasks.push(ensureFamilyHomeLoaded(), ensureFamilyNpcs());
   }
 
   const results = await Promise.allSettled(tasks);
@@ -4786,7 +5625,7 @@ function createBakeryNpc(definition, rigged) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
-  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
   syncNpcTarget(npc);
   return npc;
 }
@@ -4855,9 +5694,117 @@ async function ensureBakeryLoaded() {
   locationState.bakeryLoaded = true;
 }
 
+function normalizeUhrturmModel(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+
+  if (box.isEmpty()) {
+    return;
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  const scale = 18 / Math.max(size.y, 0.001);
+  model.scale.multiplyScalar(scale);
+  model.updateMatrixWorld(true);
+
+  const fitted = new THREE.Box3().setFromObject(model);
+  const center = fitted.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= fitted.min.y;
+}
+
+async function ensureUhrturmLoaded() {
+  if (uhrturmRoot) {
+    return;
+  }
+
+  uhrturmRoot = new THREE.Group();
+  uhrturmRoot.name = 'Uhrturm_Grunbach_Landmark';
+  uhrturmRoot.position.copy(UHR_TOWER_POINT);
+  scene.add(uhrturmRoot);
+
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+
+  try {
+    const gltf = await loadGltf(loader, UHR_TOWER_URL);
+    uhrturmModel = gltf.scene;
+    uhrturmModel.name = 'Uhrturm_Model';
+    configureStaticModel(uhrturmModel);
+    normalizeUhrturmModel(uhrturmModel);
+    uhrturmRoot.add(uhrturmModel);
+  } catch (error) {
+    console.error('Failed to load Uhrturm.glb:', error);
+    uhrturmRoot.removeFromParent();
+    uhrturmRoot = null;
+    throw error;
+  }
+}
+
+function normalizeFamilyHomeModel(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+
+  if (box.isEmpty()) {
+    return;
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  const footprint = Math.max(size.x, size.z, 0.001);
+  const height = Math.max(size.y, 0.001);
+  const scale = Math.min(8.5 / footprint, 6.2 / height);
+  model.scale.multiplyScalar(scale);
+  model.updateMatrixWorld(true);
+
+  const fitted = new THREE.Box3().setFromObject(model);
+  const center = fitted.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= fitted.min.y;
+  model.rotation.y = -Math.PI / 10;
+}
+
+async function ensureFamilyHomeLoaded() {
+  if (familyHomeRoot) {
+    return;
+  }
+
+  familyHomeRoot = new THREE.Group();
+  familyHomeRoot.name = 'Familienhaus_Emil_Landmark';
+  familyHomeRoot.position.copy(FAMILY_HOME_POINT);
+  familyHomeRoot.visible = locationState.current === LOCATION_VILLAGE;
+  scene.add(familyHomeRoot);
+
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+
+  try {
+    const gltf = await loadGltf(loader, FAMILY_HOME_URL);
+    familyHomeModel = gltf.scene;
+    familyHomeModel.name = 'Familienhaus_Model';
+    configureStaticModel(familyHomeModel);
+    normalizeFamilyHomeModel(familyHomeModel);
+    familyHomeRoot.add(familyHomeModel);
+  } catch (error) {
+    console.error('Failed to load House_Interior.glb:', error);
+    familyHomeRoot.removeFromParent();
+    familyHomeRoot = null;
+    throw error;
+  }
+}
+
 function setVillageVisibility(visible) {
   if (cityRoot) {
     cityRoot.visible = visible;
+  }
+
+  if (uhrturmRoot) {
+    uhrturmRoot.visible = visible;
+  }
+
+  if (familyHomeRoot) {
+    familyHomeRoot.visible = visible;
   }
 
   npcContainer.visible = visible;
@@ -5117,20 +6064,20 @@ async function completeBakeryQuest(npc = getBakeryHans()) {
   setBakeryStatus('abgeschlossen');
   await bakerySpeak(
     npc,
-    'Der Ofen ist heiß. Das Brot ist fertig. Du kannst backen! Super. Komm morgen wieder - du darfst hier arbeiten.',
-    'Quest 05 geschafft. Reward: +3 coins. Статус подмастерья открыт.',
+    `Der Ofen ist heiß. Das Brot ist fertig. Du kannst backen! Super, ${questState.playerName || 'Gast'}! Du darfst hier arbeiten. Jetzt geh zum Uhrturm. Uhrmacher Konrad braucht Hilfe. Sag: Ich gehe Konrad helfen.`,
+    'Печь горячая. Хлеб готов. Ты умеешь печь! Теперь иди к часовой башне: часовщику Konrad нужна помощь. Скажи: Ich gehe Konrad helfen.',
     { intent: 'happy' },
   );
-  showSceneHint('Quest 05 fertig: Du darfst in der Bäckerei arbeiten.', 9000);
+  unlockUhrturmQuest();
+  renderBakeryChips();
+  showSceneHint('Quest 06: Der Uhrturm. Finde Uhrmacher Konrad am Uhrturm.', 9000);
 }
 
 async function completeBakeryAction(action) {
   const npc = getBakeryHans();
 
   bakeryQuestState.pendingAction = '';
-  await bakerySpeak(npc, 'Du musst nichts anklicken. Sag den deutschen Satz.', 'В пекарне теперь не нужно кликать предметы. Просто скажи немецкое предложение.', {
-    intent: action === 'dough' && !bakeryQuestState.steps.permission ? 'thinking' : 'helpful',
-  });
+  await showBakeryHelp(npc);
   return true;
 }
 
@@ -6707,7 +7654,7 @@ function createNpcFromGltf(gltf, url, index, total) {
   calibrateNpcGroundBias(npc);
   npc.groundBiasDirty = false;
   refitNpcToGround(npc);
-  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: false });
+  anchorNpcVisualToRoot(npc, { horizontal: true, vertical: true });
   return npc;
 }
 
@@ -7084,9 +8031,11 @@ function updateNpcs(deltaTime) {
         now - (npc.lastVisualAnchorAt || 0) >= NPC_VISUAL_ANCHOR_CHECK_INTERVAL;
 
       if (shouldAnchor) {
+        const lockVerticalAnchor = npc.visualAnchorDirty || npc.seated || npc.lockIdle || npc.manualPlacementLocked;
+
         anchorNpcVisualToRoot(npc, {
           horizontal: true,
-          vertical: false,
+          vertical: lockVerticalAnchor,
           warn: true,
         });
         npc.visualAnchorDirty = false;
@@ -7165,6 +8114,13 @@ function renderQuestSpeechLine() {
   de.textContent = questState.currentLine.de;
   dialogueTarget.append(de);
 
+  if (questState.currentLine.ru) {
+    const ru = document.createElement('div');
+    ru.className = 'quest-line-ru';
+    ru.textContent = questState.currentLine.ru;
+    dialogueTarget.append(ru);
+  }
+
   return true;
 }
 
@@ -7177,6 +8133,14 @@ function getDefaultDialoguePrompt() {
 
   if (locationState.current === LOCATION_BAKERY) {
     return 'Подойдите к Hans в пекарне';
+  }
+
+  if (uhrturmQuestState.unlocked && !uhrturmQuestState.completed) {
+    return 'Подойдите к Uhrmacher Konrad у Uhrturm';
+  }
+
+  if (familyQuestState.unlocked && !familyQuestState.completed) {
+    return 'Подойдите к Emil на площади и скажите: Ich will helfen';
   }
 
   if (questThreeState.unlocked && !questThreeState.completed) {
@@ -7257,6 +8221,16 @@ function renderQuestChips(chips = []) {
 
       if (chip.action === 'russian-help') {
         showRussianQuestHint();
+        return;
+      }
+
+      if (chip.action === 'lesson-uhrturm') {
+        openLessonPanel('uhrturmIntro');
+        return;
+      }
+
+      if (chip.action === 'lesson-family') {
+        openLessonPanel('familyIntro');
         return;
       }
 
@@ -7408,10 +8382,11 @@ async function speakQuestLine(npc, de, ru = '', options = {}) {
   const displayDe = options.decorateObjects === false ? de : lineWithLearningNounEmojis(de);
 
   if (options.append !== false) {
-    appendDialogue(npc, 'npc', displayDe);
+    appendDialogue(npc, 'npc', displayDe, { ru });
   }
 
   setQuestSpeechLine(displayDe, ru, npc);
+  markLessonForAttention(getCurrentRussianLessonKey(npc));
   faceNpcToAgent(npc, 1);
   playNpcDialogueAnimation(npc, { animationIntent: options.intent || 'talk' });
 
@@ -7553,6 +8528,782 @@ function finishQuestSuccess(npc) {
     startQuestGuardOpenMove(npc);
   };
   speakQuestLine(npc, 'Komm rein! Müde? Geh ins Gasthaus.', 'Заходи! Устал? Иди в гостиницу.', { intent: 'happy' });
+}
+
+function normalizeClockMinutes(minutes) {
+  return ((minutes % 720) + 720) % 720;
+}
+
+function readGermanHourToken(token) {
+  const normalized = normalizeText(token);
+
+  if (GERMAN_HOUR_WORDS.has(normalized)) {
+    return GERMAN_HOUR_WORDS.get(normalized);
+  }
+
+  const numeric = Number.parseInt(normalized, 10);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function clockMinutesFromHour(hour, minute = 0) {
+  const normalizedHour = Number(hour) === 12 ? 0 : Number(hour) % 12;
+  return normalizeClockMinutes(normalizedHour * 60 + minute);
+}
+
+function parseGermanTime(input) {
+  const text = normalizeText(input);
+
+  let match = text.match(/(?:^| )halb ([a-z0-9]+)/);
+
+  if (match) {
+    const targetHour = readGermanHourToken(match[1]);
+
+    if (targetHour !== null) {
+      return clockMinutesFromHour(targetHour - 1, 30);
+    }
+  }
+
+  match = text.match(/(?:^| )viertel nach ([a-z0-9]+)/);
+
+  if (match) {
+    const hour = readGermanHourToken(match[1]);
+
+    if (hour !== null) {
+      return clockMinutesFromHour(hour, 15);
+    }
+  }
+
+  match = text.match(/(?:^| )viertel vor ([a-z0-9]+)/);
+
+  if (match) {
+    const hour = readGermanHourToken(match[1]);
+
+    if (hour !== null) {
+      return clockMinutesFromHour(hour - 1, 45);
+    }
+  }
+
+  match = text.match(/(?:^| )(?:punkt )?([a-z0-9]+) uhr(?:$| )/);
+
+  if (match) {
+    const hour = readGermanHourToken(match[1]);
+
+    if (hour !== null) {
+      return clockMinutesFromHour(hour, 0);
+    }
+  }
+
+  return null;
+}
+
+function getCurrentUhrturmTimeStep() {
+  if (uhrturmQuestState.stage === 'calibration') {
+    return UHR_TIME_CALIBRATION_STEPS[uhrturmQuestState.calibrationIndex] || null;
+  }
+
+  if (uhrturmQuestState.stage === 'service') {
+    return UHR_TIME_SERVICE_STEPS[uhrturmQuestState.serviceIndex] || null;
+  }
+
+  return null;
+}
+
+function setUhrturmClock(minutes) {
+  uhrturmQuestState.currentTimeMinutes = normalizeClockMinutes(minutes);
+}
+
+function getCurrentScheduleStep() {
+  return UHR_SCHEDULE_STEPS[uhrturmQuestState.scheduleIndex] || null;
+}
+
+async function promptUhrturmTimeStep(npc, options = {}) {
+  const step = getCurrentUhrturmTimeStep();
+
+  if (!step) {
+    return;
+  }
+
+  setUhrturmClock(step.minutes);
+
+  if (uhrturmQuestState.stage === 'service') {
+    await uhrturmSpeak(
+      npc,
+      `${step.speaker}: "${step.question}"`,
+      step.ruQuestion,
+      { append: options.append, intent: 'helpful' },
+    );
+    return;
+  }
+
+  await uhrturmSpeak(npc, step.prompt, step.ru, {
+    append: options.append,
+    intent: 'helpful',
+  });
+}
+
+async function promptUhrturmScheduleStep(npc, options = {}) {
+  const step = getCurrentScheduleStep();
+
+  if (!step) {
+    return;
+  }
+
+  await uhrturmSpeak(npc, step.prompt, step.ruPrompt, {
+    append: options.append,
+    intent: 'helpful',
+  });
+}
+
+async function completeUhrturmQuest(npc) {
+  uhrturmQuestState.completed = true;
+  uhrturmQuestState.active = false;
+  uhrturmQuestState.stage = 'complete';
+  uhrturmQuestState.pocketWatch = true;
+  renderDorfbuch();
+  renderUhrturmChips();
+  updateQuestHud();
+  setUhrturmStatus('abgeschlossen - Taschenuhr erhalten');
+  await uhrturmSpeak(
+    npc,
+    `Die Uhr läuft! Du bist ein Held, ${questState.playerName || 'Gast'}. Auf dem Platz weint Emil. Seine Familie ist weg. Geh zu ihm und sag: Ich will helfen.`,
+    'Часы идут! Ты герой. На площади плачет Emil. Его семья потерялась. Подойди к нему и скажи: Ich will helfen.',
+    { intent: 'happy' },
+  );
+  unlockFamilyQuest();
+  showSceneHint('Quest 07: Die Familie. Finde Emil auf dem Platz und sag: Ich will helfen.', 9000);
+}
+
+function uhrturmChipsForStage() {
+  if (!uhrturmQuestState.unlocked || uhrturmQuestState.completed) {
+    return uhrturmQuestState.completed
+      ? [
+          { label: 'Wie spät ist es?', submit: 'Wie spät ist es?' },
+          { label: 'Danke, Konrad', submit: 'Danke, Konrad' },
+        ]
+      : [];
+  }
+
+  if (!uhrturmQuestState.started) {
+    return [
+      { label: 'Ich gehe Konrad helfen', submit: 'Ich gehe Konrad helfen' },
+      { label: 'Wie spät ist es?', submit: 'Wie spät ist es?' },
+      { label: 'Erklärung', action: 'lesson-uhrturm' },
+    ];
+  }
+
+  if (uhrturmQuestState.stage === 'calibration') {
+    const step = getCurrentUhrturmTimeStep();
+    return [
+      step ? { label: step.answer, submit: step.answer } : { label: 'Wie spät ist es?', submit: 'Wie spät ist es?' },
+      { label: 'Erklärung', action: 'lesson-uhrturm' },
+    ];
+  }
+
+  if (uhrturmQuestState.stage === 'service') {
+    const step = getCurrentUhrturmTimeStep();
+    return [
+      step ? { label: step.answer, submit: step.answer } : { label: 'Wie spät ist es?', submit: 'Wie spät ist es?' },
+      { label: 'Erklärung', action: 'lesson-uhrturm' },
+    ];
+  }
+
+  if (uhrturmQuestState.stage === 'schedule') {
+    const step = getCurrentScheduleStep();
+    return [
+      step ? { label: step.answer, submit: step.answer } : { label: 'Plan fertig', submit: 'Plan fertig' },
+      { label: 'Erklärung', action: 'lesson-uhrturm' },
+    ];
+  }
+
+  return [
+    { label: 'Wie spät ist es?', submit: 'Wie spät ist es?' },
+    { label: 'Es ist drei Uhr', submit: 'Es ist drei Uhr' },
+    { label: 'Es ist halb drei', submit: 'Es ist halb drei' },
+    { label: 'Erklärung', action: 'lesson-uhrturm' },
+  ];
+}
+
+function renderUhrturmChips() {
+  renderQuestChips(uhrturmChipsForStage());
+}
+
+async function uhrturmSpeak(npc, de, ru = '', options = {}) {
+  setSelectedNpc(npc, { focusInput: options.focusInput !== false });
+  renderUhrturmChips();
+  return speakQuestLine(npc, de, ru, {
+    intent: options.intent || 'talk',
+    append: options.append,
+  });
+}
+
+async function openUhrturmDialogue(npc) {
+  if (!npc) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc, { focusInput: true });
+  renderUhrturmChips();
+  npc.path = [];
+  npc.pathIndex = 0;
+  npc.state = 'idle';
+  npc.waitTimer = 1.4;
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  if (!uhrturmQuestState.started) {
+    await uhrturmSpeak(
+      npc,
+      'Die Uhr ist kaputt! Niemand weiß, wie spät es ist. Hilfst du mir? Du bist meine Uhr!',
+      'Часы сломаны! Никто не знает, который час. Поможешь мне? Ты будешь моими часами!',
+      { append: false, intent: 'thinking' },
+    );
+    return;
+  }
+
+  if (uhrturmQuestState.stage === 'calibration' || uhrturmQuestState.stage === 'service') {
+    await promptUhrturmTimeStep(npc, { append: false });
+    return;
+  }
+
+  if (uhrturmQuestState.stage === 'schedule') {
+    await promptUhrturmScheduleStep(npc, { append: false });
+    return;
+  }
+
+  if (uhrturmQuestState.completed) {
+    await uhrturmSpeak(
+      npc,
+      'Die Uhr läuft. Frag mich immer: Wie spät ist es?',
+      'Часы идут. Всегда можешь спросить: Wie spät ist es?',
+      { append: false, intent: 'happy' },
+    );
+    return;
+  }
+
+  await uhrturmSpeak(
+    npc,
+    'Sehr gut. Wir lernen die Zeit: Es ist drei Uhr. Es ist halb drei. Es ist Viertel nach drei.',
+    'Хорошо. Мы учим время: три часа, половина к трём, четверть после трёх.',
+    { append: false, intent: 'helpful' },
+  );
+}
+
+async function sendUhrturmDialogueToNpc(npc, message) {
+  const line = String(message || '').trim();
+
+  if (!npc || !line) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc);
+  appendDialogue(npc, 'player', line);
+  dialogueInput.value = '';
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  const text = normalizeText(line);
+
+  if (/erklar|erklaer|hilfe|help/.test(text)) {
+    openLessonPanel('uhrturmIntro');
+    await uhrturmSpeak(npc, 'Schau in die Erklärung: halb drei ist 2:30.', 'Открой объяснение: halb drei означает 2:30.', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  if (!uhrturmQuestState.started && /(?:ich gehe.*konrad.*helfen|helfen|ja|uhr)/.test(text)) {
+    uhrturmQuestState.started = true;
+    uhrturmQuestState.stage = 'calibration';
+    uhrturmQuestState.calibrationIndex = 0;
+    uhrturmQuestState.serviceIndex = 0;
+    uhrturmQuestState.scheduleIndex = 0;
+    renderDorfbuch();
+    renderUhrturmChips();
+    setUhrturmStatus('Kalibrierung: Wie spät ist es?');
+    markLessonForAttention('uhrturmIntro');
+    await uhrturmSpeak(npc, 'Danke! Wir starten mit der Uhr.', 'Спасибо! Начинаем с часов.', { intent: 'happy' });
+    await promptUhrturmTimeStep(npc);
+    return;
+  }
+
+  if (uhrturmQuestState.stage === 'calibration') {
+    const step = getCurrentUhrturmTimeStep();
+    const parsed = parseGermanTime(line);
+
+    if (step && parsed === normalizeClockMinutes(step.minutes)) {
+      uhrturmQuestState.calibrationIndex += 1;
+      renderDorfbuch();
+
+      if (uhrturmQuestState.calibrationIndex >= UHR_TIME_CALIBRATION_STEPS.length) {
+        uhrturmQuestState.stage = 'service';
+        uhrturmQuestState.serviceIndex = 0;
+        setUhrturmStatus('Dienst: sage den Leuten die Zeit');
+        await uhrturmSpeak(
+          npc,
+          'Sehr gut! Jetzt fragen die Leute. Du antwortest mit der Zeit.',
+          'Очень хорошо! Теперь жители спрашивают. Ты отвечаешь временем.',
+          { intent: 'happy' },
+        );
+        await promptUhrturmTimeStep(npc);
+        return;
+      }
+
+      await uhrturmSpeak(npc, 'Ja! Das stimmt. Nächste Uhr.', 'Да! Верно. Следующие часы.', {
+        intent: 'happy',
+      });
+      await promptUhrturmTimeStep(npc);
+      return;
+    }
+
+    await uhrturmSpeak(
+      npc,
+      step
+        ? `Noch einmal. Schau: ${step.answer}.`
+        : 'Noch einmal. Sag die Zeit mit Es ist...',
+      step
+        ? `Ещё раз. Посмотри: ${step.answer}.`
+        : 'Ещё раз. Скажи время через Es ist...',
+      { intent: 'thinking' },
+    );
+    return;
+  }
+
+  if (uhrturmQuestState.stage === 'service') {
+    const step = getCurrentUhrturmTimeStep();
+    const parsed = parseGermanTime(line);
+
+    if (step && parsed === normalizeClockMinutes(step.minutes)) {
+      uhrturmQuestState.serviceIndex += 1;
+      renderDorfbuch();
+      await uhrturmSpeak(npc, step.success, step.ruSuccess, { intent: 'happy' });
+
+      if (uhrturmQuestState.serviceIndex >= UHR_TIME_SERVICE_STEPS.length) {
+        uhrturmQuestState.stage = 'schedule';
+        uhrturmQuestState.scheduleIndex = 0;
+        setUhrturmStatus('Dorfplan: Zeit am Anfang');
+        await uhrturmSpeak(
+          npc,
+          'Die Uhr läuft fast. Jetzt ordnen wir den Tag. Zeit zuerst, Verb auf Platz zwei.',
+          'Часы почти работают. Теперь расставим день: время в начале, глагол на втором месте.',
+          { intent: 'helpful' },
+        );
+        await promptUhrturmScheduleStep(npc);
+        return;
+      }
+
+      await promptUhrturmTimeStep(npc);
+      return;
+    }
+
+    await uhrturmSpeak(
+      npc,
+      step ? `Nicht ganz. Die richtige Antwort ist: ${step.answer}.` : 'Nicht ganz. Lies die Uhr noch einmal.',
+      step ? `Не совсем. Правильный ответ: ${step.answer}.` : 'Не совсем. Прочитай часы ещё раз.',
+      { intent: 'thinking' },
+    );
+    return;
+  }
+
+  if (uhrturmQuestState.stage === 'schedule') {
+    const step = getCurrentScheduleStep();
+
+    if (step && step.pattern.test(text)) {
+      uhrturmQuestState.schedule[step.id] = true;
+      uhrturmQuestState.scheduleIndex += 1;
+      renderDorfbuch();
+
+      if (uhrturmQuestState.scheduleIndex >= UHR_SCHEDULE_STEPS.length) {
+        await completeUhrturmQuest(npc);
+        return;
+      }
+
+      await uhrturmSpeak(npc, 'Ja! Zeit zuerst, Verb auf Platz zwei.', 'Да! Время сначала, глагол на втором месте.', {
+        intent: 'happy',
+      });
+      await promptUhrturmScheduleStep(npc);
+      return;
+    }
+
+    await uhrturmSpeak(
+      npc,
+      step
+        ? `Fast. Sag genau: ${step.answer}`
+        : 'Zeit zuerst, Verb auf Platz zwei.',
+      step
+        ? `Почти. Скажи точно: ${step.answer}`
+        : 'Время сначала, глагол на втором месте.',
+      { intent: 'thinking' },
+    );
+    return;
+  }
+
+  if (uhrturmQuestState.completed && /wie spaet|wie spat|zeit|uhr/.test(text)) {
+    await uhrturmSpeak(npc, 'Es ist drei Uhr. Deine Taschenuhr hilft dir jetzt.', 'Сейчас три часа. Теперь тебе помогают карманные часы.', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  await uhrturmSpeak(npc, 'Sag: Ich gehe Konrad helfen. Dann starten wir die Uhr.', 'Скажи: Ich gehe Konrad helfen. Тогда мы запустим квест часов.', {
+    intent: 'helpful',
+  });
+}
+
+function getCurrentFamilyStep() {
+  if (familyQuestState.stage === 'find_mama') {
+    return FAMILY_RELATION_STEPS[0];
+  }
+
+  if (familyQuestState.stage === 'find_papa') {
+    return FAMILY_RELATION_STEPS[1];
+  }
+
+  if (familyQuestState.stage === 'find_schwester') {
+    return FAMILY_RELATION_STEPS[2];
+  }
+
+  return null;
+}
+
+function familyChipsForNpc(npc = selectedNpc) {
+  if (!familyQuestState.unlocked || familyQuestState.completed) {
+    return [];
+  }
+
+  if (isFamilyEmil(npc)) {
+    if (!familyQuestState.started || familyQuestState.stage === 'offer' || familyQuestState.stage === 'find_emil') {
+      return [
+        { label: 'Ich will helfen', submit: 'Ich will helfen' },
+        { label: 'Erklärung', action: 'lesson-family' },
+      ];
+    }
+
+    if (familyQuestState.stage === 'clues') {
+      return [
+        { label: 'Wie ist deine Mama?', submit: 'Wie ist deine Mama?' },
+        { label: 'Wo ist dein Papa?', submit: 'Wo ist dein Papa?' },
+        { label: 'Wer ist deine Schwester?', submit: 'Wer ist deine Schwester?' },
+        { label: 'Erklärung', action: 'lesson-family' },
+      ];
+    }
+
+    if (familyQuestState.stage === 'self_story') {
+      return [
+        { label: 'Ich habe eine Schwester', submit: 'Ich habe eine Schwester' },
+        { label: 'Meine Mama ist nett', submit: 'Meine Mama ist nett' },
+        { label: 'Mein Papa ist gut', submit: 'Mein Papa ist gut' },
+        { label: 'Erklärung', action: 'lesson-family' },
+      ];
+    }
+  }
+
+  const step = getCurrentFamilyStep();
+
+  if (step && npc?.id === step.npcId) {
+    return [
+      { label: step.question, submit: step.question },
+      { label: 'Erklärung', action: 'lesson-family' },
+    ];
+  }
+
+  return [
+    { label: 'Ist das deine Mama?', submit: 'Ist das deine Mama?' },
+    { label: 'Ist das dein Papa?', submit: 'Ist das dein Papa?' },
+    { label: 'Ist das deine Schwester?', submit: 'Ist das deine Schwester?' },
+    { label: 'Erklärung', action: 'lesson-family' },
+  ];
+}
+
+function renderFamilyChips(npc = selectedNpc) {
+  renderQuestChips(familyChipsForNpc(npc));
+}
+
+async function familySpeak(npc, de, ru = '', options = {}) {
+  const targetNpc = npc || getFamilyEmil() || selectedNpc;
+
+  if (!targetNpc) {
+    return 0;
+  }
+
+  setSelectedNpc(targetNpc, { focusInput: options.focusInput !== false });
+  renderFamilyChips(targetNpc);
+  return speakQuestLine(targetNpc, de, ru, {
+    intent: options.intent || 'talk',
+    append: options.append,
+  });
+}
+
+function allFamilyCluesKnown() {
+  return familyQuestState.clues.mama && familyQuestState.clues.papa && familyQuestState.clues.schwester;
+}
+
+async function promptCurrentFamilySearch(npc = getFamilyEmil()) {
+  const step = getCurrentFamilyStep();
+
+  if (!step) {
+    return;
+  }
+
+  await familySpeak(
+    npc,
+    `${step.clue} Bitte frage: ${step.question}`,
+    `${step.clueRu} Спроси: ${step.question}`,
+    { intent: 'helpful' },
+  );
+}
+
+async function openFamilyDialogue(npc) {
+  if (!npc) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc, { focusInput: true });
+  renderFamilyChips(npc);
+  npc.path = [];
+  npc.pathIndex = 0;
+  npc.state = 'idle';
+  npc.waitTimer = 1.4;
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  if (isFamilyEmil(npc)) {
+    if (!familyQuestState.started) {
+      familyQuestState.stage = 'offer';
+      setFamilyStatus('sag Emil: Ich will helfen');
+      await familySpeak(
+        npc,
+        'Ich... ich finde meine Familie nicht! Wo ist meine Mama?',
+        'Я... я не могу найти свою семью! Где моя мама?',
+        { append: false, intent: 'thinking' },
+      );
+      return;
+    }
+
+    if (familyQuestState.stage === 'clues') {
+      await familySpeak(
+        npc,
+        'Frag mich nach meiner Familie: Mama, Papa, Schwester.',
+        'Спроси меня о моей семье: мама, папа, сестра.',
+        { append: false, intent: 'helpful' },
+      );
+      return;
+    }
+
+    if (familyQuestState.stage === 'self_story') {
+      await familySpeak(
+        npc,
+        'Und deine Familie? Hast du Geschwister?',
+        'А твоя семья? У тебя есть братья или сёстры?',
+        { append: false, intent: 'helpful' },
+      );
+      return;
+    }
+
+    await promptCurrentFamilySearch(npc);
+    return;
+  }
+
+  const step = FAMILY_STEP_BY_ID.get(npc.id);
+
+  if (step) {
+    await familySpeak(
+      npc,
+      `Hallo. Suchst du Emil? Frag: ${step.question}`,
+      `Привет. Ты ищешь Emil? Спроси: ${step.question}`,
+      { append: false, intent: 'greeting' },
+    );
+  }
+}
+
+async function completeFamilyQuest(npc = getFamilyMama()) {
+  familyQuestState.completed = true;
+  familyQuestState.active = false;
+  familyQuestState.stage = 'complete';
+  familyQuestState.selfStory = true;
+  familyQuestState.homeUnlocked = true;
+  renderDorfbuch();
+  renderFamilyChips(npc);
+  updateQuestHud();
+  setFamilyStatus('abgeschlossen - Familienhaus offen');
+  await familySpeak(
+    npc,
+    `Danke, ${questState.playerName || 'Gast'}! Du bist jetzt wie Familie. Komm uns besuchen!`,
+    'Спасибо! Теперь ты как часть семьи. Приходи к нам в гости!',
+    { intent: 'happy' },
+  );
+  showSceneHint('Block A1.2 abgeschlossen: Familienhaus ist offen.', 9000);
+}
+
+async function sendFamilyDialogueToNpc(npc, message) {
+  const line = String(message || '').trim();
+
+  if (!npc || !line) {
+    return;
+  }
+
+  await unlockGameAudio({ showStatus: true });
+  setSelectedNpc(npc);
+  appendDialogue(npc, 'player', line);
+  dialogueInput.value = '';
+  faceNpcToAgent(npc, 1);
+  faceAgentToNpc(npc);
+
+  const text = normalizeText(line);
+
+  if (/erklar|erklaer|hilfe|help/.test(text)) {
+    openLessonPanel('familyIntro');
+    await familySpeak(npc, 'Schau in die Erklärung: mein Papa, meine Mama.', 'Открой объяснение: mein Papa, meine Mama.', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  if (isFamilyEmil(npc) && (!familyQuestState.started || familyQuestState.stage === 'offer' || familyQuestState.stage === 'find_emil')) {
+    if (/ich will helfen|helfen|ja/.test(text)) {
+      familyQuestState.started = true;
+      familyQuestState.stage = 'clues';
+      renderDorfbuch();
+      renderFamilyChips(npc);
+      setFamilyStatus('frage Emil nach Mama, Papa und Schwester');
+      markLessonForAttention('familyIntro');
+      await familySpeak(
+        npc,
+        'Danke! Meine Mama hat einen roten Hut. Mein Papa trägt eine Brille. Meine Schwester Anna ist klein.',
+        'Спасибо! Моя мама носит красную шляпу. Мой папа носит очки. Моя сестра Anna маленькая.',
+        { intent: 'happy' },
+      );
+      familyQuestState.clues.mama = true;
+      familyQuestState.clues.papa = true;
+      familyQuestState.clues.schwester = true;
+      familyQuestState.stage = 'find_mama';
+      setFamilyStatus('finde Emils Mama');
+      renderDorfbuch();
+      renderFamilyChips(npc);
+      await promptCurrentFamilySearch(npc);
+      return;
+    }
+
+    await familySpeak(npc, 'Bitte sag: Ich will helfen.', 'Пожалуйста, скажи: Ich will helfen.', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  if (isFamilyEmil(npc) && familyQuestState.stage === 'clues') {
+    if (/mama|mutter/.test(text)) {
+      familyQuestState.clues.mama = true;
+      await familySpeak(npc, 'Meine Mama hat einen roten Hut.', 'Моя мама носит красную шляпу.', { intent: 'helpful' });
+    } else if (/papa|vater/.test(text)) {
+      familyQuestState.clues.papa = true;
+      await familySpeak(npc, 'Mein Papa trägt eine Brille.', 'Мой папа носит очки.', { intent: 'helpful' });
+    } else if (/schwester|anna/.test(text)) {
+      familyQuestState.clues.schwester = true;
+      await familySpeak(npc, 'Meine Schwester Anna ist klein.', 'Моя сестра Anna маленькая.', { intent: 'helpful' });
+    } else {
+      await familySpeak(npc, 'Frag: Wie ist deine Mama? Wo ist dein Papa? Wer ist deine Schwester?', 'Спроси: какая твоя мама? где твой папа? кто твоя сестра?', {
+        intent: 'helpful',
+      });
+    }
+
+    if (allFamilyCluesKnown()) {
+      familyQuestState.stage = 'find_mama';
+      setFamilyStatus('finde Emils Mama');
+      await promptCurrentFamilySearch(npc);
+    }
+
+    renderDorfbuch();
+    renderFamilyChips(npc);
+    return;
+  }
+
+  if (familyQuestState.stage === 'self_story') {
+    const hasFamilyPhrase = /\b(?:mein|meine|ich habe|familie|mama|papa|schwester|bruder|geschwister)\b/.test(text);
+
+    if (hasFamilyPhrase) {
+      await familySpeak(
+        getFamilyEmil() || npc,
+        'Danke. Das ist schön. Das ist meine Mama, das ist mein Papa, und das ist meine Schwester Anna!',
+        'Спасибо. Это здорово. Это моя мама, это мой папа, и это моя сестра Anna!',
+        { intent: 'happy' },
+      );
+      await completeFamilyQuest(getFamilyMama() || npc);
+      return;
+    }
+
+    await familySpeak(npc, 'Sag etwas über deine Familie: Meine Mama... / Mein Papa... / Ich habe...', 'Скажи что-нибудь о своей семье: Meine Mama... / Mein Papa... / Ich habe...', {
+      intent: 'helpful',
+    });
+    return;
+  }
+
+  const currentStep = getCurrentFamilyStep();
+  const selectedStep = FAMILY_STEP_BY_ID.get(npc.id);
+
+  if (currentStep) {
+    const asksCurrent =
+      currentStep.key === 'papa'
+        ? /ist das dein papa|dein papa|mein papa/.test(text)
+        : currentStep.key === 'mama'
+          ? /ist das deine mama|deine mama|meine mama/.test(text)
+          : /ist das deine schwester|deine schwester|meine schwester|anna/.test(text);
+
+    if (selectedStep?.key === currentStep.key && asksCurrent) {
+      familyQuestState.found[currentStep.key] = true;
+      renderDorfbuch();
+      await familySpeak(getFamilyEmil() || npc, currentStep.success, currentStep.successRu, {
+        intent: 'happy',
+      });
+
+      if (currentStep.key === 'mama') {
+        familyQuestState.stage = 'find_papa';
+        setFamilyStatus('finde Emils Papa');
+        await familySpeak(getFamilyMama() || npc, 'Danke. Such bitte auch seinen Papa.', 'Спасибо. Пожалуйста, найди ещё его папу.', {
+          intent: 'thankful',
+        });
+        await promptCurrentFamilySearch(getFamilyEmil() || npc);
+        return;
+      }
+
+      if (currentStep.key === 'papa') {
+        familyQuestState.stage = 'find_schwester';
+        setFamilyStatus('finde Emils Schwester');
+        await familySpeak(npc, 'Gut. Jetzt fehlt Anna, seine Schwester.', 'Хорошо. Теперь не хватает Anna, его сестры.', {
+          intent: 'helpful',
+        });
+        await promptCurrentFamilySearch(getFamilyEmil() || npc);
+        return;
+      }
+
+      familyQuestState.stage = 'self_story';
+      setFamilyStatus('erzähle kurz von deiner Familie');
+      await familySpeak(
+        getFamilyEmil() || npc,
+        'Das ist meine Mama, das ist mein Papa, und das ist meine Schwester Anna!',
+        'Это моя мама, это мой папа, и это моя сестра Anna!',
+        { intent: 'happy' },
+      );
+      await familySpeak(
+        getFamilyMama() || npc,
+        'Und deine Familie? Hast du Geschwister?',
+        'А твоя семья? У тебя есть братья или сёстры?',
+        { intent: 'helpful' },
+      );
+      renderFamilyChips(getFamilyMama() || npc);
+      return;
+    }
+
+    await familySpeak(getFamilyEmil() || npc, currentStep.wrong, currentStep.wrongRu, {
+      intent: 'thinking',
+    });
+    return;
+  }
+
+  await familySpeak(npc, 'Frag Emil: Ich will helfen.', 'Скажи Emil: Ich will helfen.', {
+    intent: 'helpful',
+  });
 }
 
 function handleQuestClarify(npc, helpStage) {
@@ -7817,6 +9568,8 @@ function renderDialogueHeader() {
     ((isQuestGuard(target) && !questState.completed) ||
       isGasthausNpc(target) ||
       isBakeryHans(target) ||
+      isUhrturmKonrad(target) ||
+      isFamilyNpc(target) ||
       isMarketHans(target) ||
       isMarketNpc(target) ||
       isQuestThreeNpc(target)) &&
@@ -7833,6 +9586,8 @@ function renderDialogueHeader() {
     (isQuestGuard(target) && !questState.completed) ||
     isGasthausNpc(target) ||
     isBakeryHans(target) ||
+    isUhrturmKonrad(target) ||
+    isFamilyNpc(target) ||
     isMarketHans(target) ||
     isMarketNpc(target) ||
     isQuestThreeNpc(target);
@@ -7848,6 +9603,15 @@ function renderDialogueHeader() {
     interactNpcButton.disabled = true;
     dialogueInput.disabled = true;
     dialogueSubmit.disabled = true;
+    return;
+  }
+
+  if (isFamilyEmil(target) && !familyQuestState.started) {
+    dialogueTarget.textContent = 'Emil: Ich will helfen';
+    renderFamilyChips(target);
+    interactNpcButton.disabled = false;
+    dialogueInput.disabled = false;
+    dialogueSubmit.disabled = false;
     return;
   }
 
@@ -7886,19 +9650,29 @@ function renderDialogue() {
     speaker.textContent = line.speaker === 'player' ? 'You' : npc.label;
 
     const text = document.createElement('div');
+    text.className = 'dialogue-text';
     text.textContent = line.text;
 
     row.append(speaker, text);
+
+    if (line.speaker === 'npc' && line.ru) {
+      const translation = document.createElement('div');
+      translation.className = 'dialogue-translation';
+      translation.textContent = line.ru;
+      row.append(translation);
+    }
+
     dialogueLog.append(row);
   }
 
   dialogueLog.scrollTop = dialogueLog.scrollHeight;
 }
 
-function appendDialogue(npc, speaker, text) {
+function appendDialogue(npc, speaker, text, options = {}) {
   npc.dialogue.push({
     speaker,
     text,
+    ru: options.ru || '',
     at: Date.now(),
   });
   npc.dialogue = npc.dialogue.slice(-MAX_DIALOGUE_LINES * 2);
@@ -7964,6 +9738,16 @@ function openDialogueWithNpc(npc, options = {}) {
 
   if (isBakeryHans(npc) && locationState.current === LOCATION_BAKERY) {
     openBakeryDialogue(npc);
+    return;
+  }
+
+  if (isUhrturmKonrad(npc) && locationState.current === LOCATION_VILLAGE) {
+    openUhrturmDialogue(npc);
+    return;
+  }
+
+  if (isFamilyNpc(npc) && locationState.current === LOCATION_VILLAGE) {
+    openFamilyDialogue(npc);
     return;
   }
 
@@ -8052,6 +9836,16 @@ async function sendDialogueToNpc(npc, message) {
     return;
   }
 
+  if (isUhrturmKonrad(npc) && locationState.current === LOCATION_VILLAGE) {
+    sendUhrturmDialogueToNpc(npc, line);
+    return;
+  }
+
+  if (isFamilyNpc(npc) && locationState.current === LOCATION_VILLAGE) {
+    sendFamilyDialogueToNpc(npc, line);
+    return;
+  }
+
   if (isMarketHans(npc) && locationState.current === LOCATION_VILLAGE) {
     sendMarketHansDialogueToNpc(npc, line);
     return;
@@ -8094,7 +9888,8 @@ async function sendDialogueToNpc(npc, message) {
   try {
     const payload = await requestNpcReply(npc, line);
     const reply = String(payload.reply || '...');
-    appendDialogue(npc, 'npc', lineWithLearningNounEmojis(reply));
+    const replyRu = String(payload.ru || payload.translation_ru || payload.translationRu || '');
+    appendDialogue(npc, 'npc', lineWithLearningNounEmojis(reply), { ru: replyRu });
     playNpcDialogueAnimation(npc, payload);
     const duration =
       (await npc.mouth?.speak(reply, {
@@ -8108,7 +9903,9 @@ async function sendDialogueToNpc(npc, message) {
     setStatus(`${npc.label}: ${payload.animationIntent || 'talk'}`, 'ready');
   } catch (error) {
     console.error(error);
-    appendDialogue(npc, 'npc', 'I lost the thread for a second. Try again.');
+    appendDialogue(npc, 'npc', 'Ich habe den Faden verloren. Bitte noch einmal.', {
+      ru: 'Я потерял мысль. Пожалуйста, повтори ещё раз.',
+    });
     playNpcPreferredAnimation(npc, ['shrugging', 'thinking'], { restart: true });
     setStatus(error.message || 'Dialogue failed', 'error');
   } finally {
@@ -9583,6 +11380,8 @@ function setupInputEvents() {
   exitLocationButton?.addEventListener('click', leaveCurrentLocation);
   dorfbuchOpenButton?.addEventListener('click', openDorfbuchPanel);
   dorfbuchCloseButton?.addEventListener('click', () => setFeaturePanel(dorfbuchPanel, false));
+  lessonOpenButton?.addEventListener('click', () => openLessonPanel());
+  lessonCloseButton?.addEventListener('click', () => setFeaturePanel(lessonPanel, false));
   walletOpenButton?.addEventListener('click', openWalletPanel);
   walletCloseButton?.addEventListener('click', () => setFeaturePanel(walletPanel, false));
   coinResetButton?.addEventListener('click', resetGasthausCoins);

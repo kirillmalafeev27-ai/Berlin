@@ -274,6 +274,49 @@ input:focus {
   font-size: 13px;
 }
 
+.lesson-open {
+  position: relative;
+}
+
+.lesson-open.needs-attention {
+  border-color: rgba(255, 211, 102, 0.95);
+  box-shadow: 0 0 0 3px rgba(255, 211, 102, 0.18);
+  animation: lessonPulse 1.1s ease-in-out infinite;
+}
+
+.lesson-open.needs-attention::after {
+  content: "➜";
+  position: absolute;
+  right: -18px;
+  top: 50%;
+  color: #ffd66b;
+  font-weight: 900;
+  transform: translateY(-50%);
+  animation: lessonArrow 0.8s ease-in-out infinite;
+}
+
+@keyframes lessonPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(255, 211, 102, 0.12);
+  }
+
+  50% {
+    box-shadow: 0 0 0 7px rgba(255, 211, 102, 0.24);
+  }
+}
+
+@keyframes lessonArrow {
+  0%,
+  100% {
+    transform: translate(0, -50%);
+  }
+
+  50% {
+    transform: translate(5px, -50%);
+  }
+}
+
 .feature-panel {
   top: 82px;
   left: 50%;
@@ -339,6 +382,62 @@ input:focus {
 
 .dorfbuch-card dd {
   margin: 0;
+}
+
+.lesson-panel {
+  width: min(760px, calc(100vw - 28px));
+  background: rgba(20, 24, 25, 0.9);
+}
+
+.lesson-content {
+  display: grid;
+  gap: 14px;
+  color: #14201f;
+}
+
+.lesson-page {
+  border-radius: 6px;
+  padding: 18px 20px;
+  background: #fffaf0;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  color: #17211f;
+}
+
+.lesson-page.active {
+  outline: 3px solid rgba(226, 170, 65, 0.72);
+}
+
+.lesson-page h2 {
+  margin: 0 0 10px;
+  color: #1c2c29;
+  font-size: 20px;
+}
+
+.lesson-page p {
+  margin: 6px 0;
+  color: #263937;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.lesson-page table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.lesson-page th,
+.lesson-page td {
+  border: 1px solid rgba(61, 75, 72, 0.22);
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.lesson-page th {
+  background: #e7f2ec;
+  color: #17302a;
 }
 
 .wallet-panel {
@@ -465,6 +564,18 @@ input:focus {
   font-size: 13px;
 }
 
+.dialogue-text {
+  min-width: 0;
+}
+
+.dialogue-translation {
+  grid-column: 2;
+  margin-top: 2px;
+  color: #9fb3ba;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .quest-chips {
   display: flex;
   flex-wrap: wrap;
@@ -514,6 +625,29 @@ input:focus {
 
 .dialogue-log[hidden] {
   display: none;
+}
+
+.dialogue-log {
+  display: grid;
+  gap: 6px;
+  max-height: 160px;
+  margin: 0 0 8px;
+  overflow: auto;
+}
+
+.dialogue-line {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.dialogue-speaker {
+  color: #91d9b4;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .dialogue-form {
