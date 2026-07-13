@@ -150,6 +150,10 @@ const NPC_PATROL_WAIT_MAX = 4.8;
 const NPC_PATROL_REPATH_INTERVAL = 0.7;
 const NPC_AUTONOMOUS_PATROL_ENABLED = false;
 const MAX_DIALOGUE_LINES = 12;
+// Conversation memory kept per NPC and sent to the AI: the whole session's
+// exchange (bounded), not just the last few lines, so the AI never re-asks
+// what the player already answered.
+const NPC_MEMORY_LINES = 60;
 
 const QUEST_ENABLED = true;
 const QUEST_GUARD_ID = 'guard_gate_01';
@@ -3270,7 +3274,17 @@ async function openMarketMerchantDialogue(npc) {
   faceNpcToAgent(npc, 1);
   faceAgentToNpc(npc);
 
+  // Repeat visits acknowledge what is already in the basket instead of
+  // replaying the same sales pitch.
   if (npc.id === 'kaesehaendler_otto') {
+    if (marketQuestState.basket.cheese) {
+      await marketSpeak(npc, 'Der Käse ist schon im Korb! Brauchst du noch etwas? Lena hat Eier und Milch.', 'Сыр уже куплен.', {
+        append: false,
+        intent: 'happy',
+      });
+      return;
+    }
+
     await marketSpeak(npc, 'Guten Tag. Was möchtest du? Der Käse ist frisch.', 'Use accusative: den Käse.', {
       append: false,
       intent: 'greeting',
@@ -3280,6 +3294,14 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'eierfrau_lena') {
+    if (marketQuestState.basket.eggs >= 6 && marketQuestState.basket.milk) {
+      await marketSpeak(npc, 'Eier und Milch hast du schon. Alles gut! Geh zu Hans.', 'Яйца и молоко уже в корзине.', {
+        append: false,
+        intent: 'happy',
+      });
+      return;
+    }
+
     await marketSpeak(npc, 'Hallo! Eier und Milch. Wie viele Eier möchtest du?', 'Hans needs six eggs and milk.', {
       append: false,
       intent: 'greeting',
@@ -3289,6 +3311,14 @@ async function openMarketMerchantDialogue(npc) {
   }
 
   if (npc.id === 'gemuesehaendlerin_rosa') {
+    if (marketQuestState.basket.tomatoes) {
+      await marketSpeak(npc, `Die ${marketQuestState.basket.tomatoes}n Tomaten sind im Korb. Bis bald!`, 'Помидоры уже куплены.', {
+        append: false,
+        intent: 'happy',
+      });
+      return;
+    }
+
     await marketSpeak(npc, 'Frisches Gemüse! Rote, grüne oder gelbe Tomaten?', 'Choose a color.', {
       append: false,
       intent: 'greeting',
@@ -3534,8 +3564,26 @@ async function openQuestThreeDialogue(npc) {
     return;
   }
 
+  // Prompt only what the Dorfbuch still misses for THIS neighbour, so repeat
+  // visits don't loop the same full question list.
+  const slots = questThreeState.slots[npc.id] || {};
+  const missing = [
+    !slots.name ? 'Wer bist du?' : null,
+    !slots.job ? 'Was machst du?' : null,
+    !slots.lives ? 'Wo wohnst du?' : null,
+  ].filter(Boolean);
+
+  if (!missing.length) {
+    setQuestThreeStatus('спросите остальных соседей');
+    await questThreeSpeak(npc, 'Alles im Dorfbuch! Frag auch die anderen.', 'Обо мне всё записано. Спроси остальных соседей.', {
+      append: false,
+      intent: 'happy',
+    });
+    return;
+  }
+
   setQuestThreeStatus('задайте W-вопрос');
-  await questThreeSpeak(npc, 'Frag mich: Wer? Was? Wo?', 'Спроси меня: кто? что делает? где живёт?', {
+  await questThreeSpeak(npc, `Frag mich: ${missing.join(' ')}`, 'Спроси то, чего ещё нет в Dorfbuch.', {
     append: false,
     intent: 'helpful',
     lesson: 'questThreeIntro',
@@ -7429,7 +7477,7 @@ function appendDialogue(npc, speaker, text) {
     text: speaker === 'npc' ? decorateGermanNouns(text) : text,
     at: Date.now(),
   });
-  npc.dialogue = npc.dialogue.slice(-MAX_DIALOGUE_LINES * 2);
+  npc.dialogue = npc.dialogue.slice(-NPC_MEMORY_LINES);
   renderDialogue();
 }
 
@@ -7487,9 +7535,15 @@ function openDialogueWithNpc(npc, options = {}) {
       { label: 'Nein', submit: 'Nein' },
       { label: 'Prost!', submit: 'Prost!' },
     ]);
-    gasthausSpeak(npc, 'Hallo! Schönes Dorf, ja?', 'Привет! Красивая деревня, да?', {
-      intent: 'greeting',
-    });
+
+    // A returning player gets a fresh line, not the same greeting loop.
+    if (npc.dialogue.length) {
+      gasthausSpeak(npc, 'Na, wieder da? Prost!', 'О, снова ты? Prost!', { intent: 'happy' });
+    } else {
+      gasthausSpeak(npc, 'Hallo! Schönes Dorf, ja?', 'Привет! Красивая деревня, да?', {
+        intent: 'greeting',
+      });
+    }
     return;
   }
 
@@ -7547,7 +7601,22 @@ async function requestNpcReply(npc, message) {
         role: npc.role,
       },
       message,
-      history: npc.dialogue.slice(-8),
+      history: npc.dialogue.slice(-NPC_MEMORY_LINES),
+      // Session facts so the AI never re-asks answered questions and can
+      // address the player by name.
+      context: {
+        playerName: questState.playerName || null,
+        playerOrigin: questState.playerOrigin || null,
+        day: locationState.day,
+        location: locationState.current,
+        completedQuests: [
+          questState.completed ? 'Der Wachmann' : null,
+          gasthausQuest.completed ? 'Das Gasthaus' : null,
+          questThreeState.completed ? 'Drei Nachbarn' : null,
+          marketQuestState.completed ? 'Der Markt' : null,
+          bakeryQuestState.completed ? 'In der Bäckerei' : null,
+        ].filter(Boolean),
+      },
     }),
   });
 

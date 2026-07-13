@@ -12,6 +12,7 @@ function stripPictographs(text) {
   return String(text || '')
     .replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, '')
     .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
     .trim();
 }
 

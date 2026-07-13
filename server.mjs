@@ -456,6 +456,37 @@ function stripUndefined(value) {
   );
 }
 
+// Emoji hints decorate displayed NPC lines; keep them out of the model input.
+function stripPictographs(text) {
+  return String(text || '')
+    .replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
+    .trim();
+}
+
+// The stored per-NPC conversation becomes real chat turns, so the model sees
+// ONE continuous dialogue instead of a JSON blob and stops looping over
+// questions the player already answered.
+function buildDialogueHistoryMessages(history, latestMessage) {
+  const lines = (Array.isArray(history) ? history : [])
+    .filter((line) => line && typeof line.text === 'string' && line.text.trim())
+    .map((line) => ({
+      role: line.speaker === 'player' ? 'user' : 'assistant',
+      content: stripPictographs(line.text),
+    }));
+
+  // The client appends the player's line to the log before calling us; drop
+  // that trailing duplicate so the final user turn appears exactly once.
+  const last = lines[lines.length - 1];
+
+  if (last && last.role === 'user' && last.content === stripPictographs(latestMessage)) {
+    lines.pop();
+  }
+
+  return lines;
+}
+
 async function callRemoteDialogue(input, fallback) {
   const baseUrl =
     process.env.AI_TUNNEL_BASE_URL ||
@@ -478,18 +509,38 @@ async function callRemoteDialogue(input, fallback) {
   }
 
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const npc = input.npc || {};
+  const context = input.context || {};
+  const knownFacts = [
+    context.playerName ? `The player's name is ${context.playerName}.` : '',
+    context.playerOrigin ? `The player comes from ${context.playerOrigin}.` : '',
+    Number.isFinite(Number(context.day)) ? `It is day ${context.day} in the village.` : '',
+    Array.isArray(context.completedQuests) && context.completedQuests.length
+      ? `The player already finished these quests: ${context.completedQuests.join(', ')}.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   const system = [
     'You role-play a non-player character in a German-learning village game (Grünbach).',
+    `Your character: ${npc.label || 'a villager'} - ${npc.role || 'a friendly villager'}.`,
     'The player is a beginner learning German.',
-    'Stay fully in character from npc.role and npc.label (e.g. Bruno, the friendly gate guard).',
+    'This is ONE continuous conversation; the previous turns are the messages before the last one. Remember everything said in them.',
+    'NEVER ask again for information the player already gave in this conversation or in the known facts (name, origin, job and so on) - use it instead.',
+    "First react briefly to the player's last message, then move the conversation forward: ask ONE short new question or make a remark about something not yet discussed.",
+    knownFacts ? `Known facts: ${knownFacts}` : '',
     'Always answer in simple, correct German at A1 level: 1-2 short sentences, common words, present tense.',
     'Be warm, calm and encouraging. Never shout and never use ALL CAPS or many exclamation marks.',
     'You may gently correct the player in one short clause, then answer their question.',
     'Keep it small and everyday; do not invent a big plot or leave the village.',
+    'Do not use emoji.',
     'Return only JSON with fields: reply, animationIntent, animationKeywords.',
     'Do not prefix the reply with the NPC name.',
     'animationKeywords must be 1-3 calm Mixamo hints like talking at watercooler, thinking, waving, standing greeting, pointing forward, acknowledging, thankful.',
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const remoteResponse = await fetch(endpoint, {
     method: 'POST',
@@ -501,14 +552,8 @@ async function callRemoteDialogue(input, fallback) {
       model,
       messages: [
         { role: 'system', content: system },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            npc: input.npc || {},
-            message: input.message || '',
-            recentHistory: input.history || [],
-          }),
-        },
+        ...buildDialogueHistoryMessages(input.history, input.message || ''),
+        { role: 'user', content: String(input.message || '') },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.7,
@@ -523,8 +568,16 @@ async function callRemoteDialogue(input, fallback) {
   const content = data?.choices?.[0]?.message?.content || '';
   const match = content.match(/\{[\s\S]*\}/);
 
+  // A plain-text answer is still a usable reply - better than dropping to the
+  // canned local fallback mid-conversation.
   if (!match) {
-    throw new Error('AI engine did not return JSON');
+    const plain = content.trim();
+
+    if (!plain) {
+      throw new Error('AI engine returned an empty reply');
+    }
+
+    return normalizeDialoguePayload({ reply: plain, source: 'remote' }, fallback);
   }
 
   return normalizeDialoguePayload({ ...JSON.parse(match[0]), source: 'remote' }, fallback);
